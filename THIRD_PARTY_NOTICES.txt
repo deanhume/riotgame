@@ -1,0 +1,20 @@
+Riot Control uses Axmol Engine 2.11.5.
+Engine source: https://github.com/axmolengine/axmol/tree/v2.11.5
+The engine's MIT license and bundled third-party notices are in licenses.
+The upstream dependency/version/license index is licenses/Axmol-third-party-index.md.
+
+The runtime uses the engine's dynamically linked OpenAL library. Its license
+is included at licenses/openal/COPYING. The DLL remains independently replaceable.
+Upstream: https://github.com/kcat/openal-soft
+
+Portions of this software are copyright The FreeType Project
+(https://freetype.org). All rights reserved.
+
+Microsoft Visual C++ runtime DLLs are redistributed from Visual Studio's
+x64 redistributable directory. They are not part of the game's source code.
+
+Game artwork, pixel lettering, and generated sound effects are original.
+
+The Windows installer is generated with NSIS 3.13.
+NSIS license notices are included at licenses/NSIS-COPYING.txt in installer builds.
+Upstream: https://nsis.sourceforge.io/

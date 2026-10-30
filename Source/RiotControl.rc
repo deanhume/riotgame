@@ -1,0 +1,2 @@
+// GLFW also uses this named executable resource for the window and taskbar.
+GLFW_ICON ICON "RiotControl.ico"
