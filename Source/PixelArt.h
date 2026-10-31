@@ -47,7 +47,8 @@ struct WalkerPose
 class PixelArt
 {
 public:
-    explicit PixelArt(ax::DrawNode* node, float opacity = 1.0f) : node_(node), opacity_(opacity) {}
+    explicit PixelArt(ax::DrawNode* node, float opacity = 1.0f, float offsetX = 0.0f, bool clipToScreen = false)
+        : node_(node), opacity_(opacity), offsetX_(offsetX), clipToScreen_(clipToScreen) {}
     void rect(float x, float y, float w, float h, std::uint32_t color, float alpha = 1.0f);
     void frame(float x, float y, float w, float h, std::uint32_t color, float thickness = 2.0f);
     void text(std::string_view value, float x, float y, int scale, std::uint32_t color);
@@ -84,5 +85,7 @@ private:
 
     ax::DrawNode* node_;
     float opacity_;
+    float offsetX_;
+    bool clipToScreen_;
 };
 }

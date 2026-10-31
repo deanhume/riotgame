@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameConfig.h"
+#include "DefendModel.h"
 #include "Levels.h"
 #include "Progress.h"
 
@@ -11,10 +12,13 @@
 
 namespace riot
 {
-// Title -> Map (level select) -> Intro -> Prep -> (Wave <-> Intermission) -> Won -> [Shop] -> next Intro ...
-// -> Finished. Lost retries the same level. The Shop and Wardrobe open from the Map (the Shop also opens after a
-// win when an upgrade is affordable). Every screen except the Title can go back to the Map.
-enum class Phase { Title, Map, Shop, Wardrobe, Intro, Prep, Wave, Intermission, Won, Lost, Finished };
+// Each pair: Intro -> Prep -> (Wave <-> Intermission) -> Won -> DefendIntro -> Defend -> DefendWon
+// -> [Shop] -> next pair (or Finished after the sixth defence). A loss retries only that part of the pair.
+enum class Phase
+{
+    Title, Map, Shop, Wardrobe, Intro, Prep, Wave, Intermission, Won, Lost,
+    DefendIntro, Defend, DefendWon, DefendLost, Finished
+};
 enum class GadgetType { Cone, Barrier, Van };
 enum class Throwable { Brick, SmokeBomb };
 enum class EventType
@@ -90,7 +94,7 @@ class GameModel
 public:
     // Developer and test path: jumps straight to the intro card of a 0-based level, ignoring locks.
     // Keeps the saved progress but clears the session totals.
-    void newGame(int index = 0);
+    void newGame(int index = 0, bool defend = false);
     void openMap();
     bool selectLevel(int index);
     void openShop();
@@ -103,7 +107,7 @@ public:
     bool equipCone(int index);
     void beginLevel();
     void ready();
-    // After a win: the shop if an upgrade is affordable, otherwise the next intro card (or the final screen).
+    // Riot win -> defend intro. Defend win -> shop, next riot intro, or the final screen.
     void nextLevel();
     void retryLevel();
     void backToTitle();
@@ -111,6 +115,13 @@ public:
     // Developer shortcuts: end the current level through the normal win / lose path.
     void debugWin();
     void debugLose();
+    void raiseShield(bool raised) { defend_.raiseShield(raised); }
+    bool swipe(int direction) { return phase_ == Phase::Defend && defend_.swipe(direction); }
+    const DefendModel& defence() const { return defend_; }
+    std::vector<DefendEvent> takeDefendEvents() { return defend_.takeEvents(); }
+    bool defending() const;
+    bool playing() const { return canBuild() || phase_ == Phase::Defend; }
+    int campaignNumber() const { return levelIndex_ * 2 + (defending() ? 2 : 1); }
     bool place(GadgetType type, int lane, int column);
     bool repair(int lane, int column);
     std::string placementError(GadgetType type, int lane, int column) const;
@@ -137,7 +148,7 @@ public:
     float startingBudget() const;
 
     Phase phase() const { return phase_; }
-    // Where closeShop() goes back to: Phase::Won (on to the next level) or Phase::Map.
+    // Where the shop was opened: DefendWon (on to the next riot) or Map.
     Phase shopFrom() const { return shopFrom_; }
     int levelIndex() const { return levelIndex_; }
     const LevelDef& level() const { return levels[static_cast<std::size_t>(levelIndex_)]; }
@@ -174,6 +185,9 @@ private:
     void resetLevel();
     void resetSession();
     void enterIntro();
+    void enterDefend();
+    void finishDefend();
+    void advanceCampaign();
     void enterPrep(const char* lead);
     void startWave();
     void finishWave();
@@ -217,6 +231,7 @@ private:
     int totalGaveUp_ = 0;
     int totalTrips_ = 0;
     Progress progress_;
+    DefendModel defend_;
     bool progressChanged_ = false;
     LevelResult result_;
     std::string feedback_;

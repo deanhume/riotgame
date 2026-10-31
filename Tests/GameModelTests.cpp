@@ -1,10 +1,12 @@
 #include "GameModel.h"
+#include "IntroSequence.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -89,10 +91,150 @@ bool contains(const std::vector<std::string>& list, const std::string& item)
     return std::find(list.begin(), list.end(), item) != list.end();
 }
 
+void clearDefend(GameModel& game)
+{
+    check(game.phase() == Phase::DefendIntro, "A riot is followed by a defend intro");
+    game.beginLevel();
+    int direction = 1;
+    for (int tick = 0; tick < 60 * 100 && game.phase() == Phase::Defend; ++tick)
+    {
+        if (game.defence().inReach())
+        {
+            check(game.swipe(direction), "A correctly timed baton swipe is ready");
+            direction = -direction;
+        }
+        game.tick(config::fixedStep);
+        game.takeDefendEvents();
+    }
+    check(game.phase() == Phase::DefendWon && game.defence().lives() == defendConfig::lives,
+          "Timed baton swipes can win every defend level without losing lives");
+    check(game.defence().sliced() == game.defence().totalThrows(), "Every throw can be sliced, including smoke");
+}
+
 int main()
 {
     try
     {
+        IntroSequence opening;
+        check(opening.active() && opening.scene().scene == intro::Scene::Studio,
+              "Launch intro starts in the fictional studio");
+        check(std::string(opening.caption()) == intro::scenes[0].captions[0].text,
+              "The first presenter caption appears immediately");
+        opening.tick(intro::scenes[0].captions[1].start);
+        check(std::string(opening.caption()) == intro::scenes[0].captions[1].text,
+              "The second caption replaces the first without overlap");
+        opening.tick(-1);
+        opening.tick(std::numeric_limits<float>::quiet_NaN());
+        check(opening.sceneTime() == intro::scenes[0].captions[1].start,
+              "Invalid intro deltas do not corrupt the timeline");
+        opening.tick(intro::scenes[0].seconds - opening.sceneTime());
+        check(opening.scene().scene == intro::Scene::Crowd && opening.sceneTime() == 0,
+              "The crowd scene starts at the studio boundary");
+        check(opening.cameraPosition() == 1.0f, "Camera arrives at the crowd without resetting to the studio");
+        opening.tick(intro::scenes[1].seconds);
+        check(opening.scene().scene == intro::Scene::Police, "The calm police follow the crowd");
+        opening.tick(intro::scenes[2].seconds);
+        check(opening.scene().scene == intro::Scene::Title, "The title card follows the police");
+        opening.tick(intro::scenes[3].seconds);
+        check(!opening.active(), "The whole intro completes automatically");
+        opening.tick(100);
+        check(!opening.active() && std::string(opening.caption()).empty(),
+              "A completed intro cannot animate or display captions");
+        IntroSequence fastForward;
+        fastForward.tick(intro::duration() + 1);
+        check(!fastForward.active(), "A large tick safely crosses multiple scene boundaries");
+        IntroSequence camera;
+        for (std::size_t i = 0; i + 1 < intro::scenes.size(); ++i)
+        {
+            const auto& scene = intro::scenes[i];
+            camera.tick(scene.seconds - scene.panSeconds);
+            check(std::abs(camera.cameraPosition() - static_cast<float>(i)) < 0.0001f,
+                  "Each panel holds still long enough to read before panning");
+            camera.tick(scene.panSeconds * 0.5f);
+            check(std::abs(camera.pan() - 0.5f) < 0.0001f, "The camera eases halfway between adjacent panels");
+            camera.tick(scene.panSeconds * 0.5f);
+            check(std::abs(camera.cameraPosition() - static_cast<float>(i + 1)) < 0.0001f,
+                  "Each pan ends exactly where the next panel begins");
+        }
+        camera.tick(camera.scene().seconds - intro::menuWipeSeconds * 0.5f);
+        check(camera.menuWipe() > 0.49f && camera.menuWipe() < 0.51f,
+              "The title wipes to the menu only at the end of the sequence");
+        camera.skip();
+        check(camera.menuWipe() == 0.0f && camera.pan() == 0.0f,
+              "Skipping bypasses transitions immediately");
+        float introOffset = 0;
+        for (const auto& scene : intro::scenes)
+        {
+            IntroSequence skipped;
+            skipped.tick(introOffset + scene.seconds * 0.5f);
+            check(skipped.active() && skipped.scene().scene == scene.scene, "Each intro scene can be reached");
+            skipped.skip();
+            const float stopped = skipped.sceneTime();
+            skipped.tick(100);
+            skipped.skip();
+            check(!skipped.active() && skipped.sceneTime() == stopped && std::string(skipped.caption()).empty(),
+                  "Skip immediately ends every scene and cannot restart the intro");
+            introOffset += scene.seconds;
+        }
+
+        DefendModel shield;
+        shield.reset(0);
+        shield.tick(30);
+        check(!shield.incoming() && shield.resolved() == 0, "Defend intro waits for the player");
+        shield.begin();
+        shield.raiseShield(true);
+        bool broken = false;
+        for (int tick = 0; tick < 60 * 40 && shield.phase() == DefendPhase::Active; ++tick)
+        {
+            shield.tick(config::fixedStep);
+            if (shield.blocked() == defendConfig::shieldBlocks && !broken)
+            {
+                broken = true;
+                check(shield.shieldHealth() == 0 && !shield.shielding() && shield.lives() == 3,
+                      "The fifth block breaks the shield but still protects the officer");
+            }
+        }
+        check(broken && shield.phase() == DefendPhase::Lost && shield.lives() == 0,
+              "Holding a broken shield cannot stop three missed bricks");
+        const int stoppedAt = shield.resolved();
+        shield.tick(10);
+        check(shield.resolved() == stoppedAt && !shield.swipe(1), "A finished defence freezes gameplay");
+
+        DefendModel timing;
+        timing.reset(0);
+        timing.begin();
+        while (!timing.incoming())
+            timing.tick(config::fixedStep);
+        check(timing.swipe(-1) && !timing.swipe(1), "Baton swipes have a recovery cooldown");
+        while (timing.resolved() == 0)
+            timing.tick(config::fixedStep);
+        check(timing.lives() == 2 && timing.sliced() == 0, "An early swipe does not protect against a later brick");
+        while (!timing.incoming() || !timing.inReach())
+            timing.tick(config::fixedStep);
+        timing.raiseShield(true);
+        check(timing.swipe(1) && timing.sliced() == 1 && timing.shieldHealth() == defendConfig::shieldBlocks,
+              "A timed swipe cuts the brick without using shield health");
+        check(!timing.shielding(), "A swing lowers the shield even when Space is held");
+
+        DefendModel smoke;
+        smoke.reset(0);
+        smoke.begin();
+        for (int tick = 0; tick < 60 * 25 && smoke.resolved() < 5; ++tick)
+        {
+            smoke.raiseShield(smoke.incoming() && smoke.incoming()->kind == DefendThing::Brick);
+            smoke.tick(config::fixedStep);
+        }
+        check(smoke.resolved() == 5 && smoke.smoke() > 0 && smoke.lives() == 3,
+              "Missing a smoke bomb obscures the view but does not cost a life");
+        smoke.raiseShield(true);
+        for (int tick = 0; tick < 60 * 4; ++tick)
+            smoke.tick(config::fixedStep);
+        check(smoke.smoke() == 0, "Smoke clears after a limited time");
+        smoke.reset(5);
+        check(smoke.lives() == 3 && smoke.shieldHealth() == defendConfig::shieldBlocks &&
+                  smoke.smoke() == 0 && smoke.resolved() == 0 && !smoke.incoming(),
+              "Retry starts with a fresh shield, lives and clear view");
+
         // Level data.
         int previousCrowd = 0;
         for (const auto& level : levels)
@@ -333,9 +475,16 @@ int main()
             check(campaign.totalHeldOff() == expectedHeldOff, name + " adds its score to the run total");
             check(campaign.lastLevel() == (index == levelCount - 1), "Only the last level is final");
             campaign.nextLevel();
+            const int starsBefore = campaign.progress().totalStars();
+            check(!campaign.progress().defended[index], "The riot win does not complete the defend interlude");
+            check(campaign.campaignNumber() == index * 2 + 2, "Defend levels use the even campaign numbers");
+            clearDefend(campaign);
+            check(campaign.progress().defended[index] && campaign.progress().totalStars() == starsBefore,
+                  "Defend completion is saved without awarding stars or points");
+            campaign.nextLevel();
             if (campaign.phase() == Phase::Shop)
             {
-                check(campaign.shopFrom() == Phase::Won && campaign.progress().anyAffordable(),
+                check(campaign.shopFrom() == Phase::DefendWon && campaign.progress().anyAffordable(),
                       name + " only detours through the shop when an upgrade is affordable");
                 campaign.closeShop();
             }
@@ -358,7 +507,16 @@ int main()
         shortcut.debugWin();
         check(shortcut.phase() == Phase::Won && shortcut.lastLevel(), "Debug win ends the level");
         shortcut.nextLevel();
-        check(shortcut.phase() == Phase::Finished, "Debug win on the last level finishes the game");
+        check(shortcut.phase() == Phase::DefendIntro, "Even the final riot is followed by a defence");
+        shortcut.beginLevel();
+        shortcut.debugLose();
+        check(shortcut.phase() == Phase::DefendLost, "Debug loss works during defence");
+        shortcut.retryLevel();
+        check(shortcut.phase() == Phase::Defend && shortcut.defence().lives() == 3,
+              "Defend retries restart the interlude, not the riot");
+        shortcut.debugWin();
+        shortcut.nextLevel();
+        check(shortcut.phase() == Phase::Finished, "Finishing the final defence ends the campaign");
 
         // Boredom: rioters stuck behind a wall slowly give up and go home, a few at a time.
         GameModel bored;
@@ -488,9 +646,24 @@ int main()
                   contains(career.result().unlocked, "CONE: COOL CONE"),
               "Three stars and goals met unlock cosmetics");
         check(career.takeProgressChanged() && !career.takeProgressChanged(), "A win asks to be saved once");
-        check(career.progress().stars[0] == 3 && career.progress().levelUnlocked(1) &&
-                  !career.progress().levelUnlocked(2),
-              "Clearing a level unlocks the next one only");
+        check(career.progress().stars[0] == 3 && !career.progress().levelUnlocked(1),
+              "Clearing the riot alone cannot unlock the next pair");
+        GameModel resumed;
+        resumed.setProgress(parseProgress(serialize(career.progress())));
+        resumed.openMap();
+        check(resumed.frontierLevel() == 0 && resumed.selectLevel(0) && resumed.phase() == Phase::DefendIntro,
+              "Reloading resumes the mandatory defend interlude without replaying the riot");
+        check(!resumed.selectLevel(1), "A pending defence cannot be skipped on the map");
+        resumed.beginLevel();
+        resumed.debugLose();
+        resumed.retryLevel();
+        check(resumed.progress().stars[0] == 3 && resumed.defence().lives() == 3 &&
+                  resumed.defence().shieldHealth() == defendConfig::shieldBlocks,
+              "A defence retry keeps riot stars and restores shield and lives");
+        career.nextLevel();
+        clearDefend(career);
+        check(career.progress().levelUnlocked(1) && !career.progress().levelUnlocked(2),
+              "Completing the defence unlocks the next riot only");
         career.openMap();
         check(career.frontierLevel() == 1, "The map then points at level 2");
         career.selectLevel(0);
@@ -501,7 +674,7 @@ int main()
               "Replaying for the same stars pays nothing more");
 
         career.openMap();
-        check(career.selectLevel(1), "Level 2 is open after clearing level 1");
+        check(career.selectLevel(1), "The next riot is open after completing the pair");
         career.beginLevel();
         check(career.place(GadgetType::Van, 0, 5), "A van for the goal test");
         check(!career.goalOnTrack(0), "Placing a van fails a no-vans goal at once");
@@ -513,7 +686,10 @@ int main()
 
         // The upgrade shop.
         career.nextLevel();
-        check(career.phase() == Phase::Shop && career.shopFrom() == Phase::Won, "A win with points opens the shop");
+        clearDefend(career);
+        career.nextLevel();
+        check(career.phase() == Phase::Shop && career.shopFrom() == Phase::DefendWon,
+              "A completed pair with points opens the shop");
         check(career.buyUpgrade(0) && career.progress().tiers[0] == 1, "Buy reinforced barriers");
         check(std::abs(career.maxHealth(GadgetType::Barrier) - config::gadgets[1].health * 1.15f) < 0.01f,
               "Reinforced barriers have more health");
@@ -548,14 +724,19 @@ int main()
         const Progress saved = career.progress();
         const Progress parsed = parseProgress(serialize(saved));
         check(parsed.stars == saved.stars && parsed.goalsMet == saved.goalsMet && parsed.tiers == saved.tiers &&
-                  parsed.hat == saved.hat && parsed.cone == saved.cone,
+                  parsed.hat == saved.hat && parsed.cone == saved.cone && parsed.defended == saved.defended,
               "Progress survives a save and load");
         const Progress damaged = parseProgress(
-            "stars=9,x,-2\ngoals=255\nupgrade.barriers=7\nupgrade.nonsense=2\nhat=crown\ncone=no-such-cone\n");
+            "stars=9,x,-2\ngoals=255\ndefended=8,1,-1\nupgrade.barriers=7\nupgrade.nonsense=2\nhat=crown\ncone=no-such-cone\n");
         check(damaged.stars[0] == 3 && damaged.stars[1] == 0 && damaged.stars[2] == 0 && damaged.goalsMet[0] == 3,
               "A damaged save clamps its stars and goals");
         check(damaged.pointsSpent() == 0 && damaged.hat == 0 && damaged.cone == 0,
               "A damaged save refunds unaffordable upgrades and takes off locked cosmetics");
+        check(damaged.defended[0] == 1 && damaged.defended[1] == 0 && damaged.defended[2] == 0,
+              "A defend completion requires a cleared riot and is clamped to a boolean");
+        const Progress legacy = parseProgress("stars=3,2\ngoals=3,1\n");
+        check(legacy.stars[0] == 3 && legacy.stars[1] == 2 && !legacy.defended[0] && legacy.levelUnlocked(1),
+              "Older saves keep stars and cleared riots, with their new interludes still to play");
         const auto folder = std::filesystem::temp_directory_path() / "RiotControlTests";
         std::filesystem::remove_all(folder);
         Progress loaded;

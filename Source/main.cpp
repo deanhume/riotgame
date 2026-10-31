@@ -137,7 +137,11 @@ LaunchOptions parseOptions()
         }
         else if (valueOf(i, L"--save", value) && !value.empty())
             options.game.savePath = value;
+        else if (valueOf(i, L"--smoke-state", value) && !value.empty())
+            options.game.smokeStatePath = value;
     }
+    if (!options.game.debug)
+        options.game.smokeStatePath.clear();
     LocalFree(arguments);
     return options;
 }

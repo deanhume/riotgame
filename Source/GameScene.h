@@ -2,6 +2,7 @@
 
 #include "Flavour.h"
 #include "GameModel.h"
+#include "IntroSequence.h"
 #include "PixelArt.h"
 #include "2d/Scene.h"
 #include "base/EventKeyboard.h"
@@ -23,6 +24,7 @@ public:
         int startLevel = 0;  // 1-based; 0 starts at the title screen
         bool debug = false;  // F8 clears the current level, F9 fails it
         std::filesystem::path savePath;  // empty: progress is not loaded or saved
+        std::filesystem::path smokeStatePath;  // --debug only: state observed by native smoke checks
     };
 
     static GameScene* create(const Options& options = {});
@@ -54,6 +56,10 @@ private:
     void toggleFullscreen();
     void resetScene();
     void saveIfChanged();
+    void writeSmokeState();
+    void finishCinematic();
+    void drawCinematic(PixelArt& art);
+    void updateCinematicAudio();
     bool shortStart() const;
     bool onCard() const;
     float roll();
@@ -73,6 +79,9 @@ private:
     void drawIntro(PixelArt& art);
     void drawReport(PixelArt& art);
     void drawFinished(PixelArt& art);
+    void drawDefend(PixelArt& art);
+    void drawDefendCard(PixelArt& art);
+    void processDefendEvents();
     // Draws a yellow button and registers it as a hotspot; disabled buttons are grey and not clickable.
     void button(PixelArt& art, const Button& box, std::string_view label, int scale, Command command, int arg = 0,
                 bool enabled = true);
@@ -156,8 +165,16 @@ private:
         float life;
         ax::Vec2 anchor;  // the rioter's feet; kept if the rioter disappears
     };
+    struct DefendFx
+    {
+        DefendOutcome outcome;
+        DefendThing kind;
+        ax::Vec2 position;
+        float life = 0.65f;
+    };
 
     GameModel model_;
+    IntroSequence cinematic_;
     Options options_;
     Phase shownPhase_ = Phase::Title;
     ax::DrawNode* world_ = nullptr;
@@ -170,6 +187,7 @@ private:
     std::vector<Bubble> bubbles_;
     std::vector<Thrown> thrown_;
     std::vector<Puff> smoke_;
+    std::vector<DefendFx> defendFx_;
     float accumulator_ = 0.0f;
     float time_ = 0.0f;
     float shake_ = 0.0f;
@@ -189,5 +207,11 @@ private:
     bool muted_ = false;
     bool audioFailed_ = false;
     bool saveFailed_ = false;
+    bool leftHeld_ = false;
+    bool rightHeld_ = false;
+    bool skipSpaceHeld_ = false;
+    std::string smokeState_;
+    std::size_t cinematicSoundScene_ = intro::scenes.size();
+    int cinematicSoundBeat_ = -1;
 };
 }

@@ -75,6 +75,9 @@ def main() -> None:
     write_sound(directory, "lose", 0.80, [392, 330, 262, 131])
     write_sound(directory, "clonk", 0.14, [330, 190], noise=0.3, slide=-120)
     write_sound(directory, "thud", 0.10, [110], noise=0.45, slide=-40)
+    write_sound(directory, "news", 1.2, [392, 523, 659, 784, 659, 1047])
+    write_sound(directory, "sting", 0.65, [262, 392, 523, 784], noise=0.08)
+    write_sound(directory, "murmur", 1.3, [120, 145, 105, 160, 130, 110], noise=0.65, slide=25)
     write_fizz(directory)
     (directory / "generated.stamp").write_text("Original Riot Control SFX\n", encoding="ascii")
 

@@ -10,8 +10,9 @@ bank holiday.
 Hold back the Walkers with cones, metal barriers, and a very limited fleet of
 police vans. Survive six timed waves per level without crowd mood reaching 100%.
 The rioters chatter in speech bubbles, wave daft placards and invented flags, and
-eventually get bored and go home. Every level awards up to three stars, which buy
-upgrades between levels and unlock purely cosmetic hats and cones.
+eventually get bored and go home. Each riot level awards up to three stars, which buy
+upgrades between levels and unlock purely cosmetic hats and cones. After each riot,
+take the front line yourself in a first-person **defend** level.
 
 ## Play
 
@@ -34,9 +35,28 @@ To start in a window instead, run `RiotControl.exe --windowed`.
 
 ### How a run goes
 
-Start screen (the story and a START button) → **map** (pick a level) → intro
-card → prep → six waves → level report → (upgrade shop) → next intro card → ...
-→ level 6 → **"You saved the nation"** end screen, which lists every level's
+A 23-second pixel-art news intro plays once per launch, before the existing
+start/menu screen. Press **Space** at any point to skip straight to the menu;
+other menu/gameplay input is ignored during the sequence. **M** still toggles
+global mute and **F11** still toggles full screen. Explicit `--level` developer
+launches bypass it. Returning to the menu does not replay it.
+
+The intro uses placeholder studio, crowd, police, and title scenes with timed
+subtitles and eased left-to-right pans. Subtitles and the skip hint stay fixed
+while adjacent panels slide past; the last card wipes directly to the menu.
+Presenters blink and shuffle papers, the ticker scrolls fictional headlines,
+and chunky grey bricks bonk harmlessly off the police line amid coloured smoke.
+The police sip tea while the title arrives with a brief shake and gentle pulse.
+Generated news, crowd and sting sounds respect **M**; skipping or finishing
+stops intro audio immediately.
+Edit scene durations, outgoing `panSeconds`, animation/gag settings, captions, fictional
+channel branding and headlines in `Source\IntroSequence.h`; drawings live
+separately in `Source\GameSceneCinematic.cpp`.
+
+Start screen (the story and a START button) → **map** (pick a pair) → riot intro
+card → prep → six waves → riot report → defend intro → first-person barrage →
+defend report → (upgrade shop) → next riot intro card → ...
+→ defend level 12 → **"You saved the nation"** end screen, which lists every riot's
 result and best stars. Each intro card shows the level number, the daft cause,
 the target the crowd is marching on, your best stars so far, the level's two
 bonus goals, and a heads-up about what the crowd will throw. Each report shows the
@@ -44,10 +64,17 @@ stars earned, how many rioters you held off (and how many went home bored), how
 much they lobbed at you, the bonus goals met, and a silly summary line for
 that level ("Curry sauce saved: 1 bottle").
 
-The map shows every level with its best stars. Level 1 is always open; each
-later level opens once the one before it has been cleared, and cleared levels can
-be replayed at any time for more stars. Space on the map plays the next level
+The map shows six pairs: riot levels **1, 3, 5, 7, 9, 11**, each followed by defend
+levels **2, 4, 6, 8, 10, 12**. The first pair is always open; the next opens once
+both parts of the previous pair have been cleared. Cleared pairs can be replayed
+for more riot stars. Space on the map plays the next pair
 that still needs clearing (or still lacks three stars).
+
+Defend interludes are mandatory but award no separate stars or upgrade points.
+If you leave or lose during one, your riot result is safe. Selecting that pair
+on the map resumes its pending defend intro, even after restarting the game.
+Existing saves keep their riot stars, upgrades and cosmetics; their new defend
+interludes start uncleared.
 
 If the crowd mood maxes out you lose and can **try the same level again**: it
 restarts from a clean street, budget, and van allowance. Every level starts that
@@ -72,13 +99,13 @@ is drawn smaller than 960x600 pixels (for example in a small window).
 - **Wardrobe:** hats for the officer by the target (peaked cap, bobby helmet,
   cone hat, party hat, tiny crown) and designs for your cones (stripy, cool in
   sunglasses, friendly with a face, gold). They are unlocked by total stars, by
-  clearing level 6, or by meeting certain types of bonus goal, and change nothing
+  clearing the final riot (level 11), or by meeting certain types of bonus goal, and change nothing
   but the look.
 
 **Saving:** progress is saved automatically to
 `%LOCALAPPDATA%\RiotControl\progress.txt` whenever it changes. It is a short,
 readable `key=value` text file (best stars, goals met, upgrade tiers, the hat and
-cone being worn); delete it to start from scratch. A damaged file only loses the
+cone being worn, plus which defend interludes are cleared); delete it to start from scratch. A damaged file only loses the
 damaged entries. If saving fails, the game says so in the corner and carries on.
 
 ### The crowd
@@ -112,6 +139,9 @@ damage gadgets, raise mood or cost money, and they don't change the crowd.
 | Right-click a gadget | Quick repair |
 | Space / Enter | Press the screen's main button (START, START LEVEL, NEXT LEVEL, TRY AGAIN, ...), ready the next wave, or pause/resume |
 | `1`-`6` / `S` / `W` on the map | Pick a level / open the shop / open the wardrobe |
+| Hold Space during defend | Raise the riot shield |
+| Left / Right arrow during defend | Timed baton swipe in either direction |
+| Enter during defend | Pause/resume (Space is reserved for the shield) |
 | `1`-`4` / `R` in the shop | Buy an upgrade / refund all |
 | `P` | Pause/resume during a level |
 | `Q` while paused | Quit the level and go back to the map |
@@ -120,6 +150,9 @@ damage gadgets, raise mood or cost money, and they don't change the crowd.
 | Escape | Go back: level cards and the end screen → map → start screen; close the shop or wardrobe; pause during a level; quit from the start screen |
 
 ### Rules
+
+These street rules apply to riot levels. See **First-person defend** below for
+the alternating interludes.
 
 There are three independent lanes. Walkers push into obstacles rather than
 pathfinding around them. Queued Walkers add pressure, so a crowd damages a wall
@@ -140,20 +173,43 @@ Tip: spread your initial defense across all three lanes. Timing matters:
 sometimes there is no need to repair a wall if the crowd cannot reach the
 target before the whistle.
 
-### The six levels
+### First-person defend
 
-| # | Cause | Target |
+You are the officer behind a riot shield, looking down the same pixel-art street
+at distant protestors. They throw a fixed barrage of 14 objects after the first
+riot, rising to 24 after the final riot. Later barrages arrive faster.
+
+- **Shield:** hold Space to block a brick or smoke bomb. Each block adds cracks;
+  the fifth block still protects you but breaks the shield. There are no shield
+  repairs during a barrage.
+- **Baton:** tap either arrow key when the timing box turns mint as the object
+  approaches. A successful swipe splits it in half. Swipes have a short recovery
+  time, holding an arrow does not repeat them, and swinging lowers your shield.
+- **Lives:** each missed brick costs one of your three lives. Losing all three
+  fails the interlude. Retry restores lives, shield and visibility without
+  replaying the riot.
+- **Smoke:** every fifth throw in the pattern is a smoke bomb. Missing one briefly
+  obscures the street but does not cost a life. Block or slice it to keep your
+  view clear.
+
+Resolve the whole barrage with at least one life left to win. `P`, Enter or Esc
+pauses; `Q` while paused returns to the map. Losing window focus pauses a defend
+level so a held shield cannot get stuck while you are away.
+
+### The six riot levels
+
+| Riot / defend | Cause | Target |
 | --- | --- | --- |
-| 1 | No more curry sauce at the chippy! | The chippy |
-| 2 | The last sausage roll has been sold! | The village bakery |
-| 3 | Bin day has been moved to Thursday! | The council offices |
-| 4 | Someone put pineapple on the town's official pizza! | Luigi's Pizzeria |
-| 5 | The village hall has run out of biscuits! | The village hall tea urn |
-| 6 | The bank holiday has been cancelled. Nobody knows why. | The town hall |
+| 1 / 2 | No more curry sauce at the chippy! | The chippy |
+| 3 / 4 | The last sausage roll has been sold! | The village bakery |
+| 5 / 6 | Bin day has been moved to Thursday! | The council offices |
+| 7 / 8 | Someone put pineapple on the town's official pizza! | Luigi's Pizzeria |
+| 9 / 10 | The village hall has run out of biscuits! | The village hall tea urn |
+| 11 / 12 | The bank holiday has been cancelled. Nobody knows why. | The town hall |
 
 All six use the same mechanics (Walkers only; cone, barrier, and van). Each
 level has six waves and a gentle ramp: roughly 195 Walkers in level 1 up to
-roughly 249 in level 6, about 5% more per level. The final wave is the same size
+roughly 249 in riot level 11, about 5% more per riot. The final wave is the same size
 in every level, because the damage a crowd does grows with the square of its
 length, so a bigger finale makes a level unwinnable very quickly.
 
@@ -164,7 +220,7 @@ Pass these to `RiotControl.exe`:
 | Switch | Effect |
 | --- | --- |
 | `--windowed` | Start in a window instead of full screen |
-| `--level N` (or `--level=N`) | Start on level N's intro card (1-6), even if it is locked |
+| `--level N` (or `--level=N`) | Start on campaign level N's intro card (1-12), even if locked; odd = riot, even = defend |
 | `--debug` | `F8` clears the current level, `F9` fails it (ignored without `--debug`) |
 | `--save PATH` (or `--save=PATH`) | Load and save progress at PATH instead of `%LOCALAPPDATA%\RiotControl\progress.txt` |
 
@@ -249,6 +305,11 @@ input, feedback, speech bubbles, and rendering; `PixelArt` draws the original
 pixel shapes and fonts (story text is mixed case, HUD labels stay uppercase, and
 a tiny font letters the placards); `TargetArt` draws the six placeholder
 buildings.
+`DefendModel` is the engine-independent barrage simulation (timing, shield wear,
+lives and smoke); `GameSceneDefend.cpp` draws its first-person view and cards.
+Shared timing constants live in `defendConfig` in `Source\DefendModel.h`.
+`levelCount` and the arrays in `Progress` still index the six riot/defend pairs,
+so existing riot star and goal entries retain their save-file positions.
 `tools\generate_audio.py` creates the placeholder arcade sounds locally using
 only Python's standard library.
 
@@ -282,21 +343,55 @@ win every level, and the whole campaign is played through in sequence. That bot
 is a floor, not a ceiling: winnable is not the same as fun, so play-test the
 balance. `-ModelOnly` does not require Axmol or Python.
 
+Defend checks cover shield breakage, early and correctly timed swipes, recovery
+cooldown, smoke without life loss, retries, save/resume of pending interludes,
+and a baton-only playthrough of all six barrages in campaign order.
+
 The native smoke check opens the game in its configured start mode (full screen
 by default; `.\tools\smoke_test.ps1 -Windowed` starts windowed), exercises
 mouse/keyboard controls, and toggles full screen and windowed with `F11` both
-ways. It plays level 1 from the map and quits from the pause box; plays levels 5
-and 6 to the end screen (buying an upgrade in the shop and putting on a hat in
+ways. It plays level 1 from the map and quits from the pause box; plays levels 9
+through 12 to the end screen (buying an upgrade in the shop and putting on a hat in
 the wardrobe), checks the save file, and restarts to check it loads; loses and
-retries a level and backs out with Esc; checks that a small window switches to
+retries riot and defend levels and backs out with Esc; checks that a small window switches to
 the short start text; and checks Esc on the start screen. Each scenario uses its
 own save file, so your real progress is never touched. It captures only the
 game window into `.tools\smoke` and closes it. Extra switches:
 
+- `-Quick` skips the real-time riot observation, defend barrage wait, and victory
+  animation delays, using the existing debug win/loss keys. It still launches the
+  game and exercises actual window, mouse, and keyboard input.
+- `-Scenario Defend` runs only the defend controls/retry scenario. Other groups
+  are `Riot`, `Campaign` (including save/restart), `Window`, and `Intro`; combine them with
+  commas. The default is `All`.
+- `-Screenshots Key` (default) writes only key screens and failures; `Failures`
+  writes only failure screenshots, and `All` retains every requested frame.
 - `-Tour` also captures every level's intro card, street, and a busy wave, plus
   the shop and wardrobe with everything unlocked.
 - `-Natural` also loses level 1 for real (nothing built, no debug keys), which
   takes a minute or two.
+
+For the shortest focused native check:
+
+```powershell
+.\tools\smoke_test.ps1 -Quick -Scenario Defend -Screenshots Failures
+```
+
+Omit `-Quick` for real-time gameplay checks. `-Tour` and `-Natural` cannot be
+combined with `-Quick`. Each executed scenario reports its elapsed time.
+Startup and screen changes wait for the game's reported state with a timeout
+instead of sleeping for a fixed duration. Rebuild the game before using the
+updated script: it uses the debug-only `--smoke-state PATH` switch to observe
+phase/pause state after drawing, without bypassing real input or rendering.
+The `Intro` scenario checks Space skipping in quick mode and automatic completion
+in the full run. Other groups skip the launch intro so unrelated checks stay fast.
+
+The smoke-runner wait, scenario-filter, and screenshot-policy checks do not open
+the game and can run independently:
+
+```powershell
+.\Tests\SmokeHelpersTests.ps1
+```
 
 It briefly takes over the screen, so leave the machine alone while it runs: the
 game window takes focus, and any real key press or click would reach it. Its

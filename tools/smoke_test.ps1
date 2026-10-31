@@ -1,10 +1,12 @@
 # Launches the real game window and drives it with synthetic mouse and keyboard input.
 #
 #   .\tools\smoke_test.ps1             title > map > level 1 (full screen if configured), a wave with chatter, pause,
-#                                      F11 round trip, quit to the map; then level 5 to the finale with the shop and
+#                                      F11 round trip, quit to the map; then level 9 to the finale with the shop and
 #                                      wardrobe, a restart that reloads the save, lose/retry and Esc stepping back to
 #                                      quit, and the short start text in a small window
 #   .\tools\smoke_test.ps1 -Windowed   the same, but the first scenario starts windowed
+#   .\tools\smoke_test.ps1 -Quick      skip real-time barrages and victory animation waits
+#   .\tools\smoke_test.ps1 -Quick -Scenario Defend   only the first-person controls/retry scenario
 #   .\tools\smoke_test.ps1 -Tour       also capture every level's intro card, street and a wave in progress, and the
 #                                      wardrobe and shop with everything unlocked
 #   .\tools\smoke_test.ps1 -Natural    also lose level 1 for real (no debug keys): builds nothing and waits for the
@@ -12,17 +14,23 @@
 #
 # Leave the keyboard and mouse alone while it runs: the game window takes focus, so real input would reach it.
 #
-# Frames are saved to .tools\smoke (scaled down to at most 1600 px wide). The script checks that each screen change
+# Key frames are saved to .tools\smoke (scaled down to at most 1600 px wide). The script checks that each screen change
 # really happens and that the game stays responsive; the pictures are for you to look at.
 param(
     [string]$Executable = (Join-Path $PSScriptRoot '..\dist\RiotControl\RiotControl.exe'),
     [string]$Output = (Join-Path $PSScriptRoot '..\.tools\smoke'),
     [switch]$Windowed,
+    [switch]$Quick,
+    [ValidateSet('All', 'Riot', 'Campaign', 'Defend', 'Window', 'Intro')]
+    [string[]]$Scenario = @('All'),
+    [ValidateSet('All', 'Key', 'Failures')]
+    [string]$Screenshots = 'Key',
     [switch]$Tour,
     [switch]$Natural
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Quick -and ($Tour -or $Natural)) { throw '-Quick cannot be combined with -Tour or -Natural.' }
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
@@ -54,10 +62,18 @@ $expectFullscreen = ($config -match 'startFullscreen\s*=\s*true') -and !$Windowe
 
 $script:process = $null
 $script:window = [IntPtr]::Zero
+$script:statePath = ''
 
-function Start-Game([string[]]$Arguments) {
+function Start-Game([string[]]$Arguments, [switch]$KeepIntro) {
+    $script:statePath = Join-Path $Output 'current-state.txt'
+    Remove-Item -LiteralPath $script:statePath -ErrorAction SilentlyContinue
+    $Arguments += @('--debug', '--smoke-state', $script:statePath)
     $startArguments = @{ FilePath = $Executable; WorkingDirectory = (Split-Path $Executable); PassThru = $true }
-    if ($Arguments.Count -gt 0) { $startArguments.ArgumentList = $Arguments }
+    if ($Arguments.Count -gt 0) {
+        $startArguments.ArgumentList = $Arguments | ForEach-Object {
+            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+        }
+    }
     $script:process = Start-Process @startArguments
     if (!$script:process.WaitForInputIdle(15000)) { throw 'Game did not become input-ready.' }
     $width = 0
@@ -77,14 +93,38 @@ function Start-Game([string[]]$Arguments) {
     if ($script:window -eq [IntPtr]::Zero -or $width -le 0 -or !$script:process.Responding) {
         throw 'Game has no responsive native window.'
     }
-    Start-Sleep -Seconds 2
+    Wait-State
+    if (!$KeepIntro -and [System.IO.File]::ReadAllText($script:statePath) -match '(?m)^phase=Cinematic\r?$') {
+        Press-Key 32
+        Wait-State 'Title'
+    }
+}
+
+function Wait-Until([scriptblock]$Condition, [string]$Message, [int]$TimeoutMilliseconds = 5000) {
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        Assert-Alive $Message
+        if (& $Condition) { return }
+        Start-Sleep -Milliseconds 50
+    } while ($watch.ElapsedMilliseconds -lt $TimeoutMilliseconds)
+    throw "Timed out: $Message"
+}
+
+function Wait-State([string]$Phase = '', [int]$Paused = -1, [int]$TimeoutMilliseconds = 5000) {
+    Wait-Until {
+        if (!(Test-Path -LiteralPath $script:statePath)) { return $false }
+        try { $state = [System.IO.File]::ReadAllText($script:statePath) }
+        catch [System.IO.IOException] { Write-Verbose "State file is being updated: $_"; return $false }
+        $phaseReady = if ($Phase) { $state -match "(?m)^phase=$([regex]::Escape($Phase))\r?$" } else { $state -match '(?m)^phase=\w+\r?$' }
+        $phaseReady -and ($Paused -lt 0 -or $state -match "(?m)^paused=$Paused\r?$")
+    } "expected phase '$Phase', paused=$Paused (check the game was rebuilt)" $TimeoutMilliseconds
 }
 
 # A full screen window minimises itself when it loses focus (as in any full screen game), so bring it back.
 function Restore-Window {
     if ([RiotWindow]::IsIconic($script:window)) {
         $null = [RiotWindow]::ShowWindow($script:window, 9)
-        Start-Sleep -Milliseconds 800
+        Wait-Until { ![RiotWindow]::IsIconic($script:window) } 'restore the game window'
     }
 }
 
@@ -111,7 +151,10 @@ function Set-ClientSize([int]$width, [int]$height) {
     # SWP_NOZORDER | SWP_NOACTIVATE
     $null = [RiotWindow]::SetWindowPos($script:window, [IntPtr]::Zero, $outer.Left, $outer.Top,
         $width + $extraWidth, $height + $extraHeight, 0x14)
-    Start-Sleep -Milliseconds 1000
+    Wait-Until {
+        $size = Get-ClientSize
+        $size.Width -eq $width -and $size.Height -eq $height
+    } "resize the client to ${width}x${height}"
 }
 
 function Test-Fullscreen {
@@ -123,11 +166,7 @@ function Test-Fullscreen {
 }
 
 function Wait-Fullscreen([bool]$expected) {
-    for ($attempt = 0; $attempt -lt 50; ++$attempt) {
-        if ((Test-Fullscreen) -eq $expected) { Start-Sleep -Milliseconds 500; return }
-        Start-Sleep -Milliseconds 100
-    }
-    throw "Game window is not $(if ($expected) { 'full screen' } else { 'windowed' }) as expected."
+    Wait-Until { (Test-Fullscreen) -eq $expected } "full screen=$expected"
 }
 
 # A coarse fingerprint of a frame, so a screen change can be checked without comparing whole images.
@@ -145,9 +184,15 @@ function Get-Signature([System.Drawing.Bitmap]$image) {
     , $samples
 }
 
-# Saves the window contents as <name>.png and returns the frame's signature.
-function Save-Frame([string]$name) {
-    Start-Sleep -Milliseconds 300
+function Test-SaveFrame([string]$name, [bool]$Force) {
+    $Force -or $Screenshots -eq 'All' -or
+        ($Screenshots -eq 'Key' -and ($name -in @('title', 'map', 'finished', 'defend_active2', 'defend_lost', 'cinematic_studio') -or
+                                    $name.StartsWith('tour_')))
+}
+
+# Always fingerprints the window; only writes PNGs selected by the screenshot policy.
+function Save-Frame([string]$name, [string]$Phase = '', [int]$Paused = -1, [switch]$Force, [switch]$Probe) {
+    if ($Phase) { Wait-State $Phase $Paused }
     $size = Get-ClientSize
     $image = New-Object System.Drawing.Bitmap($size.Width, $size.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($image)
@@ -160,11 +205,13 @@ function Save-Frame([string]$name) {
     }
     try {
         $signature = Get-Signature $image
-        $saved = $image
-        if ($image.Width -gt 1600) {
-            $saved = New-Object System.Drawing.Bitmap($image, 1600, [int]($image.Height * 1600 / $image.Width))
+        if (!$Probe -and (Test-SaveFrame $name ([bool]$Force))) {
+            $saved = $image
+            if ($image.Width -gt 1600) {
+                $saved = New-Object System.Drawing.Bitmap($image, 1600, [int]($image.Height * 1600 / $image.Width))
+            }
+            try { $saved.Save((Join-Path $Output "$name.png")) } finally { if ($saved -ne $image) { $saved.Dispose() } }
         }
-        try { $saved.Save((Join-Path $Output "$name.png")) } finally { if ($saved -ne $image) { $saved.Dispose() } }
     } finally {
         $image.Dispose()
     }
@@ -185,10 +232,8 @@ function Get-Difference($before, $after) {
 }
 
 function Assert-Changed($before, $after, [string]$what) {
-    $difference = Get-Difference $before $after
-    if ($difference -lt 0.05) {
-        throw "$what (only $([Math]::Round($difference * 100, 1))% of the frame changed)."
-    }
+    if ((Get-Difference $before $after) -ge 0.05) { return }
+    Wait-Until { (Get-Difference $before (Save-Frame 'transition' -Probe)) -ge 0.05 } $what
 }
 
 function Assert-Alive([string]$context) {
@@ -204,17 +249,17 @@ function Click-Game([int]$x, [int]$y) {
     $clientY = [int](($size.Height - 800 * $scale) / 2 + (800 - $y) * $scale)
     $position = [IntPtr](($clientY -shl 16) -bor $clientX)
     $null = [RiotWindow]::PostMessage($script:window, 0x200, [IntPtr]::Zero, $position)
-    Start-Sleep -Milliseconds 60
     $null = [RiotWindow]::PostMessage($script:window, 0x201, [IntPtr]1, $position)
     $null = [RiotWindow]::PostMessage($script:window, 0x202, [IntPtr]::Zero, $position)
-    Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds 50
 }
 
-function Press-Key([int]$code) {
+function Press-Key([int]$code, [int]$HoldMilliseconds = 0) {
     $flags = ([RiotWindow]::MapVirtualKey($code, 0) -shl 16) -bor 1
     $null = [RiotWindow]::PostMessage($script:window, 0x100, [IntPtr]$code, [IntPtr]$flags)
+    if ($HoldMilliseconds -gt 0) { Start-Sleep -Milliseconds $HoldMilliseconds }
     $null = [RiotWindow]::PostMessage($script:window, 0x101, [IntPtr]$code, [IntPtr]($flags -bor 0xC0000000))
-    Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds 50
 }
 
 # Button centres on the 1280x800 design.
@@ -233,12 +278,20 @@ $wardrobeBack = @(640, 126)
 function Get-HatTile([int]$index) { @((560 + 128 * $index), 505) }
 function Get-ConeTile([int]$index) { @((560 + 128 * $index), 325) }
 
-function Invoke-Scenario([string]$Name, [string[]]$Arguments, [scriptblock]$Steps) {
+function Invoke-Scenario([string]$Group, [string]$Name, [string[]]$Arguments, [scriptblock]$Steps) {
+    if ($Scenario -notcontains 'All' -and $Scenario -notcontains $Group) { return }
     Write-Host "-- $Name"
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $script:process = $null
     try {
-        Start-Game $Arguments
+        Start-Game $Arguments -KeepIntro:($Group -eq 'Intro')
         & $Steps
+    } catch {
+        $failure = $_
+        if ($null -ne $script:process -and !$script:process.HasExited -and $script:window -ne [IntPtr]::Zero) {
+            try { $null = Save-Frame "failure_$Group" -Force } catch { Write-Warning "Failure capture: $_" }
+        }
+        throw $failure
     } finally {
         if ($null -ne $script:process -and !$script:process.HasExited) {
             $null = $script:process.CloseMainWindow()
@@ -246,6 +299,7 @@ function Invoke-Scenario([string]$Name, [string[]]$Arguments, [scriptblock]$Step
         }
     }
     if ($script:process.ExitCode -ne 0) { throw "${Name}: game exited with code $($script:process.ExitCode)." }
+    Write-Host ("   completed in {0:N1}s" -f $watch.Elapsed.TotalSeconds)
 }
 
 # Each scenario saves progress to its own file under the output folder, never to the player's real save.
@@ -255,20 +309,44 @@ function Get-SavePath([string]$name) {
     $path
 }
 
+Invoke-Scenario 'Intro' 'launch intro and immediate Space skip' @('--windowed', '--save', (Get-SavePath 'intro')) {
+    $opening = Save-Frame 'cinematic_studio' 'Cinematic'
+    Press-Key 13
+    Wait-State 'Cinematic'
+    if (!$Quick) {
+        foreach ($scene in 1..3) {
+            Wait-Until {
+                [System.IO.File]::ReadAllText($script:statePath) -match "(?m)^introScene=$scene\r?$"
+            } "intro scene $scene" 10000
+            $null = Save-Frame "cinematic_scene$scene" 'Cinematic'
+        }
+        Wait-State 'Title' -1 6000
+    } else {
+        Press-Key 32 150
+        Wait-State 'Title'
+    }
+    $title = Save-Frame 'cinematic_menu' 'Title'
+    Assert-Changed $opening $title 'The cinematic did not return to the menu'
+    Press-Key 13
+    $null = Save-Frame 'cinematic_map' 'Map'
+    Press-Key 0x1B
+    $null = Save-Frame 'cinematic_return_title' 'Title'
+}
+
 $playSave = Get-SavePath 'play'
 $playArguments = @('--save', $playSave) + $(if ($Windowed) { @('--windowed') } else { @() })
-Invoke-Scenario 'play level 1 from the map' $playArguments {
+Invoke-Scenario 'Riot' 'play level 1 from the map' $playArguments {
     $mode = if ($expectFullscreen) { 'full screen' } else { 'windowed' }
     if ((Test-Fullscreen) -ne $expectFullscreen) { throw "Game did not start $mode as configured." }
-    $title = Save-Frame 'title'
+    $title = Save-Frame 'title' 'Title'
     Click-Game @titleButton
-    $map = Save-Frame 'map'
+    $map = Save-Frame 'map' 'Map'
     Assert-Changed $title $map 'START did not open the map'
     Click-Game @mapLevel1
-    $intro = Save-Frame 'intro1'
+    $intro = Save-Frame 'intro1' 'Intro'
     Assert-Changed $map $intro 'Clicking level 1 on the map did not open its intro card'
     Click-Game @introButton
-    $prep = Save-Frame 'street1'
+    $prep = Save-Frame 'street1' 'Prep'
     Assert-Changed $intro $prep 'START LEVEL did not begin the level'
     Click-Game 596 444
     Click-Game 596 340
@@ -277,12 +355,15 @@ Invoke-Scenario 'play level 1 from the map' $playArguments {
     Click-Game 362 444
     $null = Save-Frame 'prep'
     Press-Key 32
-    foreach ($second in 6, 9, 12, 15) {
-        Start-Sleep -Seconds 3
-        $null = Save-Frame "wave_$second"
+    Wait-State 'Wave'
+    if (!$Quick) {
+        foreach ($second in 6, 9, 12, 15) {
+            Start-Sleep -Seconds 3
+            $null = Save-Frame "wave_$second"
+        }
     }
     Press-Key 80
-    $paused = Save-Frame 'paused'
+    $paused = Save-Frame 'paused' 'Wave' 1
     Press-Key 0x7A
     Wait-Fullscreen (!$expectFullscreen)
     $null = Save-Frame 'toggled'
@@ -290,136 +371,188 @@ Invoke-Scenario 'play level 1 from the map' $playArguments {
     Wait-Fullscreen $expectFullscreen
     $null = Save-Frame 'restored'
     Click-Game @pauseQuit
-    $back = Save-Frame 'map_after_quit'
+    $back = Save-Frame 'map_after_quit' 'Map'
     Assert-Changed $paused $back 'QUIT TO MAP did not leave the level'
     Assert-Alive 'gameplay'
     Write-Host "   started $mode, F11 toggles both ways, pause quits to the map"
 }
 
 $campaignSave = Get-SavePath 'campaign'
-Invoke-Scenario 'campaign: level 5 to the finale, shop and wardrobe (--level 5 --debug)' @('--windowed', '--level', '5', '--debug', '--save', $campaignSave) {
-    $intro = Save-Frame 'intro5'
+Invoke-Scenario 'Campaign' 'campaign: riot 9, defend 10, riot 11, defend 12, shop and wardrobe' @('--windowed', '--level', '9', '--debug', '--save', $campaignSave) {
+    $intro = Save-Frame 'intro5' 'Intro'
     Press-Key 13     # Enter: START LEVEL
-    $street = Save-Frame 'street5'
+    $street = Save-Frame 'street5' 'Prep'
     Assert-Changed $intro $street 'Enter did not begin level 5'
     Press-Key 0x77   # F8: clear the level
-    Start-Sleep -Milliseconds 1800
-    $report = Save-Frame 'won5'
+    if (!$Quick) { Start-Sleep -Milliseconds 1800 }
+    $report = Save-Frame 'won5' 'Won'
     Assert-Changed $street $report 'F8 did not show the level report'
-    Press-Key 32     # Space: UPGRADES (stars were earned, so points are there to spend)
-    $shop = Save-Frame 'shop_after_win'
-    Assert-Changed $report $shop 'Space did not open the upgrade shop after a win'
+    Press-Key 32
+    $defendIntro = Save-Frame 'defend_intro10' 'DefendIntro'
+    Assert-Changed $report $defendIntro 'The riot report did not lead to defend level 10'
+    Press-Key 13
+    $defend = Save-Frame 'defend10' 'Defend'
+    Assert-Changed $defendIntro $defend 'Enter did not start the first-person defence'
+    Press-Key 0x77
+    $defendWon = Save-Frame 'defend_won10' 'DefendWon'
+    Assert-Changed $defend $defendWon 'F8 did not finish the defence'
+    Press-Key 13
+    $shop = Save-Frame 'shop_after_win' 'Shop'
+    Assert-Changed $defendWon $shop 'The completed defence did not lead to the upgrade shop'
     Click-Game @shopBuy1
     $bought = Save-Frame 'shop_bought'
     if ((Get-Difference $shop $bought) -le 0) { throw 'BUY changed nothing in the shop.' }
     Click-Game @shopPrimary
-    $next = Save-Frame 'intro6'
+    $next = Save-Frame 'intro6' 'Intro'
     Assert-Changed $bought $next 'NEXT LEVEL in the shop did not open the level 6 intro card'
     Press-Key 13
-    $street6 = Save-Frame 'street6'
+    $street6 = Save-Frame 'street6' 'Prep'
     Assert-Changed $next $street6 'Enter did not begin level 6'
     Press-Key 0x77
-    Start-Sleep -Milliseconds 1800
-    $report6 = Save-Frame 'won6'
+    if (!$Quick) { Start-Sleep -Milliseconds 1800 }
+    $report6 = Save-Frame 'won6' 'Won'
     Assert-Changed $street6 $report6 'F8 did not show the level 6 report'
-    Press-Key 32     # FINISH: the last level goes straight to the end screen
-    Start-Sleep -Milliseconds 1500
-    $finished = Save-Frame 'finished'
+    Press-Key 32
+    $null = Save-Frame 'defend_intro12' 'DefendIntro'
+    Press-Key 13
+    $null = Save-Frame 'defend12' 'Defend'
+    Press-Key 0x77
+    $null = Save-Frame 'defend_won12' 'DefendWon'
+    Press-Key 13     # FINISH after the final defence, not the final riot
+    if (!$Quick) { Start-Sleep -Milliseconds 1500 }
+    $finished = Save-Frame 'finished' 'Finished'
     Assert-Changed $report6 $finished 'Space did not show the end screen'
     Press-Key 13     # BACK TO MAP
-    $map = Save-Frame 'map_after_finale'
+    $map = Save-Frame 'map_after_finale' 'Map'
     Assert-Changed $finished $map 'Enter did not return to the map'
     Press-Key 0x57   # W: wardrobe
-    $wardrobe = Save-Frame 'wardrobe'
+    $wardrobe = Save-Frame 'wardrobe' 'Wardrobe'
     Assert-Changed $map $wardrobe 'W did not open the wardrobe'
     $partyHat = Get-HatTile 3   # unlocked by clearing level 6
     Click-Game @partyHat
     $party = Save-Frame 'wardrobe_party'
     if ((Get-Difference $wardrobe $party) -le 0) { throw 'Clicking the party hat changed nothing.' }
     Click-Game @wardrobeBack
-    $null = Save-Frame 'map_party'
+    $null = Save-Frame 'map_party' 'Map'
     Press-Key 0x1B   # Esc: map to title
-    $null = Save-Frame 'title_party'
+    $null = Save-Frame 'title_party' 'Title'
     Press-Key 0x1B   # Esc on the title quits
     if (!$script:process.WaitForExit(4000)) { throw 'Esc on the title did not quit.' }
     $saved = Get-Content $campaignSave -Raw
-    if ($saved -notmatch 'hat=party' -or $saved -notmatch 'upgrade\.barriers=1' -or $saved -notmatch 'stars=0,0,0,0,[1-3],[1-3]') {
+    if ($saved -notmatch 'hat=party' -or $saved -notmatch 'upgrade\.barriers=1' -or
+        $saved -notmatch 'stars=0,0,0,0,[1-3],[1-3]' -or $saved -notmatch 'defended=0,0,0,0,1,1') {
         throw "Progress was not saved as expected:`n$saved"
     }
     Write-Host '   stars, upgrade and hat saved'
 }
 
-Invoke-Scenario 'progress survives a restart' @('--windowed', '--save', $campaignSave) {
-    $title = Save-Frame 'reload_title'
+Invoke-Scenario 'Campaign' 'progress survives a restart' @('--windowed', '--save', $campaignSave) {
+    $title = Save-Frame 'reload_title' 'Title'
     Click-Game @titleButton
-    $map = Save-Frame 'reload_map'
+    $map = Save-Frame 'reload_map' 'Map'
     Assert-Changed $title $map 'START did not open the map'
     Click-Game @mapShop
-    $shop = Save-Frame 'reload_shop'
+    $shop = Save-Frame 'reload_shop' 'Shop'
     Assert-Changed $map $shop 'The shop button did not open the shop'
     Press-Key 0x1B
-    $back = Save-Frame 'reload_map_again'
+    $back = Save-Frame 'reload_map_again' 'Map'
     Assert-Changed $shop $back 'Esc did not leave the shop'
     Assert-Alive 'reload'
 }
 
 $loseSave = Get-SavePath 'lose'
-Invoke-Scenario 'lose, retry and back out, mouse and Esc (--level 2 --debug)' @('--windowed', '--level', '2', '--debug', '--save', $loseSave) {
-    $intro = Save-Frame 'intro2'
+Invoke-Scenario 'Riot' 'lose, retry and back out, mouse and Esc (--level 3 --debug)' @('--windowed', '--level', '3', '--debug', '--save', $loseSave) {
+    $intro = Save-Frame 'intro2' 'Intro'
     Click-Game @introButton
-    $street = Save-Frame 'street2'
+    $street = Save-Frame 'street2' 'Prep'
     Assert-Changed $intro $street 'START LEVEL did not begin level 2'
     Press-Key 0x78   # F9: fail the level
-    $lost = Save-Frame 'lost2'
+    $lost = Save-Frame 'lost2' 'Lost'
     Assert-Changed $street $lost 'F9 did not show the level report'
     Click-Game @reportButton
-    $retry = Save-Frame 'retry2'
+    $retry = Save-Frame 'retry2' 'Prep'
     Assert-Changed $lost $retry 'TRY AGAIN did not restart the level'
     Press-Key 0x78
-    $again = Save-Frame 'lost2_again'
+    $again = Save-Frame 'lost2_again' 'Lost'
     Press-Key 0x1B
-    $map = Save-Frame 'map_after_loss'
+    $map = Save-Frame 'map_after_loss' 'Map'
     Assert-Changed $again $map 'Esc on the report did not go back to the map'
     Press-Key 0x1B
-    $title = Save-Frame 'title_after_loss'
+    $title = Save-Frame 'title_after_loss' 'Title'
     Assert-Changed $map $title 'Esc on the map did not go back to the title'
     Press-Key 0x1B
     if (!$script:process.WaitForExit(4000)) { throw 'Esc on the title did not quit.' }
     Write-Host '   Esc steps back: report > map > title > quit'
 }
 
-Invoke-Scenario 'short start text (small window)' @('--windowed', '--save', (Get-SavePath 'small')) {
-    $long = Save-Frame 'title_long'
+Invoke-Scenario 'Defend' 'defend: shield, baton, pause, loss and retry' @('--windowed', '--level', '2', '--debug', '--save', (Get-SavePath 'defend')) {
+    $intro = Save-Frame 'defend_intro2' 'DefendIntro'
+    Press-Key 13
+    $active = Save-Frame 'defend_active2' 'Defend'
+    Assert-Changed $intro $active 'Enter did not start defence'
+    Press-Key 80
+    $paused = Save-Frame 'defend_paused' 'Defend' 1
+    Assert-Changed $active $paused 'P did not pause defence'
+    Press-Key 13
+    Wait-State 'Defend' 0
+    Press-Key 0x25
+    $swipe = Save-Frame 'defend_swipe'
+    Assert-Alive 'baton swipe'
+    Press-Key 0x78
+    $lost = Save-Frame 'defend_lost' 'DefendLost'
+    Assert-Changed $swipe $lost 'F9 did not fail defence'
+    Press-Key 13
+    $retry = Save-Frame 'defend_retry' 'Defend'
+    Assert-Changed $lost $retry 'Retry did not restart defence'
+    if ($Quick) {
+        Press-Key 32 100
+        Press-Key 0x78
+    } else {
+        Press-Key 32 3200
+        $null = Save-Frame 'defend_shield_cracked' 'Defend'
+    }
+    Wait-State 'DefendLost' -1 15000
+    $naturalLoss = Save-Frame 'defend_missed_bricks' 'DefendLost'
+    Assert-Changed $retry $naturalLoss 'Missed bricks did not change the defence'
+    Press-Key 0x1B
+    $null = Save-Frame 'defend_map' 'Map'
+}
+
+Invoke-Scenario 'Window' 'short start text (small window)' @('--windowed', '--save', (Get-SavePath 'small')) {
+    $long = Save-Frame 'title_long' 'Title'
     Set-ClientSize 800 500
     $short = Save-Frame 'title_short'
     Assert-Changed $long $short 'Shrinking the window did not switch to the short start text'
     Click-Game @titleButton
-    $map = Save-Frame 'map_small'
+    $map = Save-Frame 'map_small' 'Map'
     Assert-Changed $short $map 'START did not work in the small window'
     Assert-Alive 'small window'
 }
 
 if ($Tour) {
     foreach ($level in 1..6) {
-        Invoke-Scenario "tour: level $level" @('--windowed', '--level', "$level", '--save', (Get-SavePath 'tour')) {
-            $null = Save-Frame "tour_intro$level"
+        $campaignLevel = $level * 2 - 1
+        Invoke-Scenario 'Riot' "tour: riot level $campaignLevel" @('--windowed', '--level', "$campaignLevel", '--save', (Get-SavePath 'tour')) {
+            $null = Save-Frame "tour_intro$level" 'Intro'
             Click-Game @introButton
-            $null = Save-Frame "tour_street$level"
+            $null = Save-Frame "tour_street$level" 'Prep'
             Click-Game 596 444
             Click-Game 596 340
             Click-Game 596 236
             Press-Key 32
+            Wait-State 'Wave'
             Start-Sleep -Seconds 14
             $null = Save-Frame "tour_wave$level"
         }
     }
     # A save with every star and goal, so everything in the wardrobe is unlocked.
     $fullSave = Get-SavePath 'full'
-    Set-Content -Path $fullSave -Value "stars=3,3,3,3,3,3`ngoals=3,3,3,3,3,3"
-    Invoke-Scenario 'tour: wardrobe and shop with everything unlocked' @('--windowed', '--save', $fullSave) {
+    Set-Content -Path $fullSave -Value "stars=3,3,3,3,3,3`ngoals=3,3,3,3,3,3`ndefended=1,1,1,1,1,1"
+    Invoke-Scenario 'Campaign' 'tour: wardrobe and shop with everything unlocked' @('--windowed', '--save', $fullSave) {
         Click-Game @titleButton
-        $null = Save-Frame 'tour_map_full'
+        $null = Save-Frame 'tour_map_full' 'Map'
         Click-Game @mapWardrobe
+        Wait-State 'Wardrobe'
         $crown = Get-HatTile 4
         $goldCone = Get-ConeTile 4
         Click-Game @crown
@@ -427,30 +560,22 @@ if ($Tour) {
         $null = Save-Frame 'tour_wardrobe_full'
         Click-Game @wardrobeBack
         Click-Game @mapShop
-        $null = Save-Frame 'tour_shop_full'
+        $null = Save-Frame 'tour_shop_full' 'Shop'
     }
 }
 
 if ($Natural) {
-    Invoke-Scenario 'natural loss: level 1 with no defences' @('--windowed', '--level', '1', '--save', (Get-SavePath 'natural')) {
+    Invoke-Scenario 'Riot' 'natural loss: level 1 with no defences' @('--windowed', '--level', '1', '--save', (Get-SavePath 'natural')) {
         Click-Game @introButton
-        Start-Sleep -Milliseconds 500
+        Wait-State 'Prep'
         Press-Key 32     # READY with nothing built
-        $previous = Save-Frame 'natural_wave'
-        $lost = $null
-        for ($waited = 0; $waited -lt 180 -and $null -eq $lost; $waited += 5) {
-            Start-Sleep -Seconds 5
-            $frame = Save-Frame 'natural_progress'
-            if ((Get-Difference $previous $frame) -gt 0.3) { $lost = $frame }
-            $previous = $frame
-        }
-        if ($null -eq $lost) { throw 'The crowd never broke through an undefended level 1.' }
-        $null = Save-Frame 'natural_lost'
+        Wait-State 'Lost' -1 180000
+        $lost = Save-Frame 'natural_lost' 'Lost'
         Click-Game @reportButton
-        $retry = Save-Frame 'natural_retry'
+        $retry = Save-Frame 'natural_retry' 'Prep'
         Assert-Changed $lost $retry 'TRY AGAIN did not restart the level'
-        Write-Host "   the crowd broke through after about $waited seconds"
+        Write-Host '   the crowd broke through without debug shortcuts'
     }
 }
 
-Write-Host "Smoke test passed; frames saved in $Output"
+Write-Host "Smoke test passed (Quick=$Quick, Scenario=$($Scenario -join ','), Screenshots=$Screenshots); artifacts in $Output"

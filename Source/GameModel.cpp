@@ -53,6 +53,12 @@ bool GameModel::canBuild() const
     return phase_ == Phase::Prep || phase_ == Phase::Wave || phase_ == Phase::Intermission;
 }
 
+bool GameModel::defending() const
+{
+    return phase_ == Phase::DefendIntro || phase_ == Phase::Defend ||
+           phase_ == Phase::DefendWon || phase_ == Phase::DefendLost;
+}
+
 int GameModel::cost(GadgetType type) const
 {
     int price = stats(type).cost;
@@ -144,6 +150,31 @@ void GameModel::enterIntro()
     feedback_.clear();
 }
 
+void GameModel::enterDefend()
+{
+    defend_.reset(levelIndex_);
+    walkers_.clear();
+    gadgets_.clear();
+    events_.clear();
+    phase_ = Phase::DefendIntro;
+    feedback_.clear();
+}
+
+void GameModel::finishDefend()
+{
+    if (defend_.phase() == DefendPhase::Lost)
+        phase_ = Phase::DefendLost;
+    else if (defend_.phase() == DefendPhase::Won)
+    {
+        phase_ = Phase::DefendWon;
+        if (progress_.stars[levelIndex_] > 0 && !progress_.defended[levelIndex_])
+        {
+            progress_.defended[levelIndex_] = 1;
+            progressChanged_ = true;
+        }
+    }
+}
+
 void GameModel::enterPrep(const char* lead)
 {
     phase_ = Phase::Prep;
@@ -159,11 +190,13 @@ void GameModel::backToTitle()
     progressChanged_ = changed;
 }
 
-void GameModel::newGame(int index)
+void GameModel::newGame(int index, bool defend)
 {
     backToTitle();
     levelIndex_ = std::clamp(index, 0, levelCount - 1);
     enterIntro();
+    if (defend)
+        enterDefend();
 }
 
 void GameModel::openMap()
@@ -179,12 +212,14 @@ bool GameModel::selectLevel(int index)
         return false;
     levelIndex_ = index;
     enterIntro();
+    if (progress_.stars[index] > 0 && !progress_.defended[index])
+        enterDefend();
     return true;
 }
 
 void GameModel::openShop()
 {
-    if (phase_ != Phase::Map && phase_ != Phase::Won)
+    if (phase_ != Phase::Map && phase_ != Phase::DefendWon)
         return;
     shopFrom_ = phase_;
     phase_ = Phase::Shop;
@@ -196,12 +231,17 @@ void GameModel::closeShop()
     if (phase_ != Phase::Shop)
         return;
     feedback_.clear();
-    if (shopFrom_ != Phase::Won)
+    if (shopFrom_ != Phase::DefendWon)
     {
         phase_ = Phase::Map;
         return;
     }
     shopFrom_ = Phase::Map;
+    advanceCampaign();
+}
+
+void GameModel::advanceCampaign()
+{
     if (lastLevel())
         phase_ = Phase::Finished;
     else
@@ -284,7 +324,7 @@ bool GameModel::takeProgressChanged()
 int GameModel::frontierLevel() const
 {
     for (int index = 0; index < levelCount; ++index)
-        if (progress_.stars[index] == 0)
+        if (progress_.stars[index] == 0 || !progress_.defended[index])
             return index;
     for (int index = 0; index < levelCount; ++index)
         if (progress_.stars[index] < maxStarsPerLevel)
@@ -317,11 +357,21 @@ void GameModel::beginLevel()
 {
     if (phase_ == Phase::Intro)
         enterPrep("SET UP YOUR LINE.");
+    else if (phase_ == Phase::DefendIntro)
+    {
+        defend_.begin();
+        phase_ = Phase::Defend;
+    }
 }
 
 void GameModel::nextLevel()
 {
-    if (phase_ != Phase::Won)
+    if (phase_ == Phase::Won)
+    {
+        enterDefend();
+        return;
+    }
+    if (phase_ != Phase::DefendWon)
         return;
     if (lastLevel())
     {
@@ -332,13 +382,19 @@ void GameModel::nextLevel()
         openShop();
     else
     {
-        ++levelIndex_;
-        enterIntro();
+        advanceCampaign();
     }
 }
 
 void GameModel::retryLevel()
 {
+    if (phase_ == Phase::DefendLost)
+    {
+        defend_.reset(levelIndex_);
+        defend_.begin();
+        phase_ = Phase::Defend;
+        return;
+    }
     if (phase_ != Phase::Lost)
         return;
     resetLevel();
@@ -435,6 +491,12 @@ void GameModel::failLevel()
 
 void GameModel::debugWin()
 {
+    if (phase_ == Phase::Defend)
+    {
+        defend_.debugFinish(true);
+        finishDefend();
+        return;
+    }
     if (!canBuild())
         return;
     waveIndex_ = waveCount() - 1;
@@ -444,6 +506,12 @@ void GameModel::debugWin()
 
 void GameModel::debugLose()
 {
+    if (phase_ == Phase::Defend)
+    {
+        defend_.debugFinish(false);
+        finishDefend();
+        return;
+    }
     if (!canBuild())
         return;
     mood_ = config::maximumMood;
@@ -723,7 +791,15 @@ bool GameModel::throwOne(Throwable kind)
 
 void GameModel::tick(float dt)
 {
-    if (!canBuild() || !std::isfinite(dt) || dt <= 0.0f)
+    if (!std::isfinite(dt) || dt <= 0.0f)
+        return;
+    if (phase_ == Phase::Defend)
+    {
+        defend_.tick(dt);
+        finishDefend();
+        return;
+    }
+    if (!canBuild())
         return;
 
     remaining_ = std::max(0.0f, remaining_ - dt);

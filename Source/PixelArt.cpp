@@ -264,6 +264,18 @@ constexpr float flagTextWidth = 54.0f;
 
 void PixelArt::rect(float x, float y, float w, float h, std::uint32_t color, float alpha)
 {
+    x += offsetX_;
+    if (clipToScreen_)
+    {
+        const float right = std::min(static_cast<float>(config::width), x + w);
+        const float top = std::min(static_cast<float>(config::height), y + h);
+        x = std::max(0.0f, x);
+        y = std::max(0.0f, y);
+        w = right - x;
+        h = top - y;
+        if (w <= 0.0f || h <= 0.0f)
+            return;
+    }
     const ax::Color4F rgba(
         static_cast<float>((color >> 16) & 255) / 255.0f,
         static_cast<float>((color >> 8) & 255) / 255.0f,

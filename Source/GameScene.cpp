@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <fstream>
 #include <span>
 
 namespace riot
@@ -181,6 +182,18 @@ bool GameScene::init()
 
     auto* keyboard = ax::EventListenerKeyboard::create();
     keyboard->onKeyPressed = [this](ax::EventKeyboard::KeyCode code, ax::Event*) { key(code); };
+    keyboard->onKeyReleased = [this](ax::EventKeyboard::KeyCode code, ax::Event*) {
+        using Key = ax::EventKeyboard::KeyCode;
+        if (code == Key::KEY_SPACE)
+        {
+            model_.raiseShield(false);
+            skipSpaceHeld_ = false;
+        }
+        else if (code == Key::KEY_LEFT_ARROW)
+            leftHeld_ = false;
+        else if (code == Key::KEY_RIGHT_ARROW)
+            rightHeld_ = false;
+    };
     _eventDispatcher->addEventListenerWithSceneGraphPriority(keyboard, this);
     ax::AudioEngine::setMaxAudioInstance(12);
 
@@ -191,7 +204,10 @@ bool GameScene::init()
             model_.setProgress(saved);
     }
     if (options_.startLevel > 0)
-        model_.newGame(options_.startLevel - 1);
+    {
+        cinematic_.skip();
+        model_.newGame((options_.startLevel - 1) / 2, options_.startLevel % 2 == 0);
+    }
     scheduleUpdate();
     return true;
 }
@@ -211,6 +227,9 @@ void GameScene::resetScene()
     thrown_.clear();
     smoke_.clear();
     fx_.clear();
+    defendFx_.clear();
+    model_.raiseShield(false);
+    leftHeld_ = rightHeld_ = false;
     hotspots_.clear();
 }
 
@@ -231,6 +250,48 @@ void GameScene::saveIfChanged()
     saveFailed_ = !saved;
 }
 
+void GameScene::writeSmokeState()
+{
+    if (options_.smokeStatePath.empty())
+        return;
+    const char* phase = "";
+    switch (model_.phase())
+    {
+    case Phase::Title: phase = "Title"; break;
+    case Phase::Map: phase = "Map"; break;
+    case Phase::Shop: phase = "Shop"; break;
+    case Phase::Wardrobe: phase = "Wardrobe"; break;
+    case Phase::Intro: phase = "Intro"; break;
+    case Phase::Prep: phase = "Prep"; break;
+    case Phase::Wave: phase = "Wave"; break;
+    case Phase::Intermission: phase = "Intermission"; break;
+    case Phase::Won: phase = "Won"; break;
+    case Phase::Lost: phase = "Lost"; break;
+    case Phase::DefendIntro: phase = "DefendIntro"; break;
+    case Phase::Defend: phase = "Defend"; break;
+    case Phase::DefendWon: phase = "DefendWon"; break;
+    case Phase::DefendLost: phase = "DefendLost"; break;
+    case Phase::Finished: phase = "Finished"; break;
+    }
+    const std::string state = std::string("phase=") + (cinematic_.active() ? "Cinematic" : phase) +
+                              "\nintroScene=" + std::to_string(cinematic_.sceneIndex()) +
+                              "\npaused=" + (paused_ ? "1" : "0") +
+                              "\nshield=" + std::to_string(model_.defence().shieldHealth()) +
+                              "\nsliced=" + std::to_string(model_.defence().sliced()) + "\n";
+    if (state == smokeState_)
+        return;
+    std::ofstream output(options_.smokeStatePath, std::ios::trunc);
+    output << state;
+    output.flush();
+    if (!output)
+    {
+        AXLOGE("Riot Control: could not write smoke state to {}", options_.smokeStatePath.string());
+        options_.smokeStatePath.clear();
+        return;
+    }
+    smokeState_ = state;
+}
+
 bool GameScene::shortStart() const
 {
     const auto* view = ax::Director::getInstance()->getRenderView();
@@ -240,7 +301,7 @@ bool GameScene::shortStart() const
 // Every screen except the street while a level is being played.
 bool GameScene::onCard() const
 {
-    return !model_.canBuild();
+    return !model_.playing();
 }
 
 float GameScene::roll()
@@ -262,6 +323,7 @@ void GameScene::perform(Command command, int arg)
         return;
     case Command::Resume:
         paused_ = false;
+        model_.raiseShield(false);
         return;
     case Command::Buy:
         sound(model_.buyUpgrade(arg) ? "repair" : "bonk");
@@ -310,7 +372,7 @@ void GameScene::perform(Command command, int arg)
 void GameScene::primaryAction()
 {
     hotspots_.clear();
-    if (paused_ && model_.canBuild())
+    if (paused_ && model_.playing())
     {
         paused_ = false;
         return;
@@ -331,16 +393,21 @@ void GameScene::primaryAction()
         model_.closeWardrobe();
         break;
     case Phase::Intro:
+    case Phase::DefendIntro:
         model_.beginLevel();
         break;
     case Phase::Won:
+    case Phase::DefendWon:
         model_.nextLevel();
         break;
     case Phase::Lost:
+    case Phase::DefendLost:
         model_.retryLevel();
         break;
     case Phase::Wave:
+    case Phase::Defend:
         paused_ = true;
+        model_.raiseShield(false);
         return;
     case Phase::Prep:
     case Phase::Intermission:
@@ -371,12 +438,17 @@ void GameScene::goBack()
     case Phase::Prep:
     case Phase::Wave:
     case Phase::Intermission:
+    case Phase::Defend:
         paused_ = !paused_;
+        model_.raiseShield(false);
         return;
     case Phase::Intro:
     case Phase::Won:
     case Phase::Lost:
     case Phase::Finished:
+    case Phase::DefendIntro:
+    case Phase::DefendWon:
+    case Phase::DefendLost:
         model_.openMap();
         break;
     }
@@ -408,8 +480,31 @@ void GameScene::key(ax::EventKeyboard::KeyCode code)
         if (muted_)
             ax::AudioEngine::stopAll();
     }
+    else if (cinematic_.active())
+    {
+        if (code == Key::KEY_SPACE)
+        {
+            skipSpaceHeld_ = true;
+            finishCinematic();
+        }
+    }
+    else if (code == Key::KEY_SPACE && skipSpaceHeld_)
+        return;
     else if (code == Key::KEY_ESCAPE)
         goBack();
+    else if (model_.phase() == Phase::Defend &&
+             (code == Key::KEY_SPACE || code == Key::KEY_LEFT_ARROW || code == Key::KEY_RIGHT_ARROW))
+    {
+        if (code == Key::KEY_SPACE)
+            model_.raiseShield(!paused_);
+        else
+        {
+            bool& held = code == Key::KEY_LEFT_ARROW ? leftHeld_ : rightHeld_;
+            if (!paused_ && !held && model_.swipe(code == Key::KEY_LEFT_ARROW ? -1 : 1))
+                sound("thud", 0.15f);
+            held = true;
+        }
+    }
     else if (code == Key::KEY_SPACE || code == Key::KEY_ENTER || code == Key::KEY_KP_ENTER)
         primaryAction();
     else if (options_.debug && (code == Key::KEY_F8 || code == Key::KEY_F9))
@@ -420,6 +515,7 @@ void GameScene::key(ax::EventKeyboard::KeyCode code)
             model_.debugLose();
         paused_ = false;
         processEvents();
+        processDefendEvents();
         saveIfChanged();
     }
     else
@@ -445,10 +541,14 @@ void GameScene::key(ax::EventKeyboard::KeyCode code)
         case Phase::Prep:
         case Phase::Wave:
         case Phase::Intermission:
+        case Phase::Defend:
             if (digit >= 0 && digit < 4)
                 selected_ = digit;
             else if (code == Key::KEY_P)
+            {
                 paused_ = !paused_;
+                model_.raiseShield(false);
+            }
             else if (code == Key::KEY_Q && paused_)
                 perform(Command::Quit);
             break;
@@ -472,6 +572,8 @@ std::pair<int, int> GameScene::cellAt(ax::Vec2 point) const
 
 void GameScene::click(ax::Vec2 point, bool repair)
 {
+    if (cinematic_.active())
+        return;
     if (inside(point, 1010, 17, 250, 30))
     {
         key(ax::EventKeyboard::KeyCode::KEY_M);
@@ -892,6 +994,29 @@ void GameScene::updateCrowd(float dt)
 void GameScene::update(float dt)
 {
     dt = std::clamp(dt, 0.0f, 0.1f);
+    if (cinematic_.active())
+    {
+        cinematic_.tick(dt);
+        if (!cinematic_.active())
+            finishCinematic();
+        else
+            updateCinematicAudio();
+        drawFrame();
+        writeSmokeState();
+        return;
+    }
+    if (model_.phase() == Phase::Defend)
+    {
+        const auto* view = renderView();
+        auto* window = view ? view->getWindow() : nullptr;
+        const bool focused = window && glfwGetWindowAttrib(window, GLFW_FOCUSED);
+        model_.raiseShield(focused && !paused_ && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
+        if (!focused)
+        {
+            paused_ = true;
+            leftHeld_ = rightHeld_ = false;
+        }
+    }
     if (!paused_)
     {
         time_ += dt;
@@ -909,13 +1034,17 @@ void GameScene::update(float dt)
             accumulator_ -= config::fixedStep;
         }
         processEvents();
+        processDefendEvents();
+        for (auto& effect : defendFx_)
+            effect.life -= dt;
+        std::erase_if(defendFx_, [](const DefendFx& effect) { return effect.life <= 0.0f; });
         updateCrowd(dt);
         updateThrown(dt);
         if (model_.phase() != shownPhase_)
         {
-            if (model_.phase() == Phase::Lost)
+            if (model_.phase() == Phase::Lost || model_.phase() == Phase::DefendLost)
                 sound("lose");
-            else if (model_.phase() == Phase::Finished)
+            else if (model_.phase() == Phase::Finished || model_.phase() == Phase::DefendWon)
                 sound("win");
             shownPhase_ = model_.phase();
             screenTime_ = 0.0f;
@@ -963,6 +1092,7 @@ void GameScene::update(float dt)
     world_->setPosition(shake_ > 0 ? std::sin(time_ * 80) * shake_ * 13 : 0,
                         shake_ > 0 ? std::cos(time_ * 94) * shake_ * 8 : 0);
     drawFrame();
+    writeSmokeState();
 }
 
 void GameScene::drawStreet(PixelArt& art)
@@ -1233,7 +1363,7 @@ void GameScene::drawHud(PixelArt& art)
     art.rect(24, 733, 44, 44, blue);
     art.text("RC", 29, 744, 3, dark);
     art.text("RIOT CONTROL", 84, 756, 3, paper);
-    art.text("LEVEL " + number(model_.levelIndex() + 1) + "/" + number(levelCount), 330, 756, 2, yellow);
+    art.text("LEVEL " + number(model_.campaignNumber()) + "/" + number(levelCount * 2), 330, 756, 2, yellow);
     art.text(upper(level.cause), 86, 735, 1, muted);
     const int waves = model_.waveCount();
     const int wave = std::max(1, model_.waveIndex() + 1);
@@ -1490,23 +1620,24 @@ void GameScene::drawMap(PixelArt& art)
         art.rect(tile.x + 8, tile.y - 6, tile.w, tile.h, 0xb9a888);
         art.rect(tile.x, tile.y, tile.w, tile.h, !open ? 0xd8cbb0 : hot ? 0xfff6dc : panel);
         art.frame(tile.x, tile.y, tile.w, tile.h, open && i == frontier ? coralInk : ink, open && i == frontier ? 4.0f : 3.0f);
-        art.text("LEVEL " + number(i + 1), tile.x + 18, tile.y + 152, 3, open ? ink : brownInk);
+        art.text("LEVELS " + number(i * 2 + 1) + "-" + number(i * 2 + 2), tile.x + 18, tile.y + 152, 2,
+                 open ? ink : brownInk);
         art.text("[" + number(i + 1) + "]", tile.x + tile.w - 38, tile.y + 160, 1, brownInk);
         if (!open)
         {
             art.padlock(tile.x + tile.w * 0.5f, tile.y + 62, 5, brownInk);
-            art.centered("CLEAR LEVEL " + number(i) + " TO UNLOCK", tile.x + tile.w * 0.5f, tile.y + 34, 1, brownInk);
+            art.centered("CLEAR DEFEND " + number(i * 2) + " TO UNLOCK", tile.x + tile.w * 0.5f, tile.y + 34, 1, brownInk);
             continue;
         }
-        if (i + 1 == levelCount)
-            art.text("FINAL", tile.x + 166, tile.y + 159, 2, coralInk);
         float baseline = tile.y + 124;
         for (const std::string& line : PixelArt::wrap(level.cause, tile.w - 36, 2))
         {
             art.text(line, tile.x + 18, baseline, 2, coralInk);
             baseline -= 20.0f;
         }
-        art.text("TARGET: " + upper(level.target), tile.x + 18, tile.y + 52, 1, brownInk);
+        const bool pending = progress.stars[i] > 0 && !progress.defended[i];
+        art.text(pending ? "NEXT: FIRST-PERSON DEFEND" : progress.defended[i] ? "RIOT + DEFEND CLEARED" : "RIOT THEN FIRST-PERSON DEFEND",
+                 tile.x + 18, tile.y + 52, 1, pending ? coralInk : brownInk);
         for (int star = 0; star < maxStarsPerLevel; ++star)
             drawStar(art, tile.x + 34 + static_cast<float>(star) * 36, tile.y + 26, 3,
                      star < progress.stars[static_cast<std::size_t>(i)], false);
@@ -1517,7 +1648,7 @@ void GameScene::drawMap(PixelArt& art)
         }
         hotspots_.push_back({tile, Command::Level, i});
     }
-    art.centered("CLICK A LEVEL OR PRESS 1-6. SPACE PLAYS THE NEXT ONE. S SHOP, W WARDROBE.", 640, 172, 1, brownInk);
+    art.centered("PICK A PAIR [1-6]. SPACE CONTINUES. S SHOP, W WARDROBE.", 640, 172, 1, brownInk);
     const int points = progress.points();
     button(art, {140, 95, 320, 62}, "SHOP: " + number(points) + (points == 1 ? " POINT" : " POINTS"), 2,
            Command::Shop);
@@ -1582,7 +1713,7 @@ void GameScene::drawShop(PixelArt& art)
     }
     art.centered(model_.feedback(), 640, 160, 1, ink);
     button(art, {150, 85, 300, 62}, "REFUND ALL", 2, Command::Refund, 0, progress.pointsSpent() > 0);
-    const bool onward = model_.shopFrom() == Phase::Won;
+    const bool onward = model_.shopFrom() == Phase::DefendWon;
     button(art, {680, 85, 450, 62}, !onward ? "< BACK TO MAP" : model_.lastLevel() ? "FINISH >" : "NEXT LEVEL >", 2,
            Command::Primary);
     art.centered("[1-4] BUY  [R] REFUND", 565, 112, 1, brownInk);
@@ -1682,13 +1813,12 @@ void GameScene::drawIntro(PixelArt& art)
     art.rect(0, 0, 1068, 685, dark, 0.74f);
     drawCard(art, 70, 180, 940, 470);
     art.rect(86, 578, 908, 56, ink);
-    art.text("LEVEL " + number(index + 1), 108, 587, 6, yellow);
-    const float starsX = 108.0f + PixelArt::textWidth("LEVEL " + number(index + 1), 6) + 34.0f;
+    art.text("LEVEL " + number(model_.campaignNumber()), 108, 587, 6, yellow);
+    const float starsX = 108.0f + PixelArt::textWidth("LEVEL " + number(model_.campaignNumber()), 6) + 34.0f;
     for (int star = 0; star < maxStarsPerLevel; ++star)
         drawStar(art, starsX + static_cast<float>(star) * 34, 606, 3,
                  star < progress.stars[static_cast<std::size_t>(index)], true);
-    if (model_.lastLevel())
-        art.text("FINAL LEVEL", 520, 599, 2, coral);
+    art.text("RIOT", 660, 599, 2, coral);
     for (int i = 0; i < levelCount; ++i)
         art.rect(834 + i * 26.0f, 597, 18, 18, i < index ? mint : i == index ? yellow : 0x3c5661);
 
@@ -1745,11 +1875,11 @@ void GameScene::drawReport(PixelArt& art)
     art.rect(0, 0, 1280, 685, dark, 0.74f);
     drawCard(art, 171, 120, 938, 549);
     art.rect(187, 609, 906, 35, ink);
-    art.text("LEVEL " + number(model_.levelIndex() + 1) + " REPORT", 207, 621, 2, yellow);
+    art.text("LEVEL " + number(model_.campaignNumber()) + " REPORT", 207, 621, 2, yellow);
     const std::string target = upper(level.target);
     art.text(target, 1077 - PixelArt::textWidth(target, 1), 624, 1, paper);
 
-    art.centered(won ? "LEVEL " + number(model_.levelIndex() + 1) + " CLEARED!" : "OH, CRUMBS.", 640, 541, 6,
+    art.centered(won ? "LEVEL " + number(model_.campaignNumber()) + " CLEARED!" : "OH, CRUMBS.", 640, 541, 6,
                  won ? greenInk : redInk);
     art.centered(won ? level.victory : level.defeat, 640, 507, 2, ink);
 
@@ -1810,8 +1940,7 @@ void GameScene::drawReport(PixelArt& art)
                      640, 232, 1, coralInk);
     }
 
-    const std::string next = !won ? "TRY AGAIN >" : model_.lastLevel() ? "FINISH >" :
-                             model_.progress().anyAffordable() ? "UPGRADES >" : "NEXT LEVEL >";
+    const std::string next = !won ? "TRY AGAIN >" : "DEFEND NEXT >";
     button(art, {231, 140, 260, 62}, "< MAP", 2, Command::Map);
     button(art, {640, 140, 400, 62}, next, 2, Command::Primary);
     drawSystemHints(art);
@@ -1868,6 +1997,11 @@ void GameScene::drawFrame()
     hotspots_.clear();
     PixelArt world(world_);
     PixelArt ui(ui_);
+    if (cinematic_.active())
+    {
+        drawCinematic(ui);
+        return;
+    }
     switch (model_.phase())
     {
     case Phase::Title:
@@ -1884,6 +2018,14 @@ void GameScene::drawFrame()
         break;
     case Phase::Finished:
         drawFinished(ui);
+        break;
+    case Phase::DefendIntro:
+    case Phase::Defend:
+    case Phase::DefendWon:
+    case Phase::DefendLost:
+        drawDefend(world);
+        drawDefendCard(ui);
+        drawSystemHints(ui);
         break;
     case Phase::Intro:
     case Phase::Prep:

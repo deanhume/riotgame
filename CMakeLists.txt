@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(RIOT_MODEL_ONLY "Build gameplay tests without the graphics engine" OFF)
 
-add_library(RiotModel Source/GameModel.cpp Source/Progress.cpp)
+add_library(RiotModel Source/GameModel.cpp Source/Progress.cpp Source/DefendModel.cpp)
 target_include_directories(RiotModel PUBLIC Source)
 if(MSVC)
     target_compile_options(RiotModel PRIVATE /W4 /permissive- /utf-8)
@@ -68,7 +68,7 @@ add_custom_command(OUTPUT ${RIOT_BRANDING_FILES}
     VERBATIM)
 add_custom_target(RiotBranding DEPENDS ${RIOT_BRANDING_FILES})
 
-add_executable(RiotControl WIN32 Source/main.cpp Source/GameScene.cpp Source/PixelArt.cpp Source/TargetArt.cpp
+add_executable(RiotControl WIN32 Source/main.cpp Source/GameScene.cpp Source/GameSceneDefend.cpp Source/GameSceneCinematic.cpp Source/PixelArt.cpp Source/TargetArt.cpp
     Source/RiotControl.rc)
 add_dependencies(RiotControl RiotAudio RiotBranding)
 set_source_files_properties(Source/RiotControl.rc PROPERTIES OBJECT_DEPENDS "${RIOT_BRANDING_DIR}/RiotControl.ico")

@@ -87,7 +87,7 @@ bool Progress::levelUnlocked(int index) const
     if (index < 0 || index >= levelCount)
         return false;
     // A level already cleared stays open even if the one before it never was (e.g. after --level).
-    return index == 0 || stars[index - 1] > 0 || stars[index] > 0;
+    return index == 0 || (stars[index - 1] > 0 && defended[index - 1] != 0) || stars[index] > 0;
 }
 
 bool Progress::goalTypeMet(GoalType type) const
@@ -159,6 +159,7 @@ void Progress::sanitize()
     {
         stars[level] = std::clamp(stars[level], 0, maxStarsPerLevel);
         goalsMet[level] = stars[level] > 0 ? goalsMet[level] & allGoals : 0u;
+        defended[level] = stars[level] > 0 && defended[level] > 0 ? 1 : 0;
     }
     for (int i = 0; i < upgradeCount; ++i)
         tiers[i] = std::clamp(tiers[i], 0, upgrades[i].tierCount);
@@ -247,6 +248,7 @@ std::string serialize(const Progress& progress)
     text += "version=" + std::to_string(saveVersion) + "\n";
     text += "stars=" + writeList(progress.stars) + "\n";
     text += "goals=" + writeList(progress.goalsMet) + "\n";
+    text += "defended=" + writeList(progress.defended) + "\n";
     for (int i = 0; i < upgradeCount; ++i)
         text += std::string("upgrade.") + upgrades[i].id + "=" + std::to_string(progress.tiers[i]) + "\n";
     text += std::string("hat=") + hats[progress.hat].id + "\n";
@@ -271,6 +273,8 @@ Progress parseProgress(std::string_view text)
             readList(value, progress.stars);
         else if (key == "goals")
             readList(value, progress.goalsMet);
+        else if (key == "defended")
+            readList(value, progress.defended);
         else if (key == "hat")
             progress.hat = findId(hats, value);
         else if (key == "cone")

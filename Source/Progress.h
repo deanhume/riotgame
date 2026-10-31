@@ -16,6 +16,7 @@ struct Progress
 {
     std::array<int, levelCount> stars{};
     std::array<unsigned, levelCount> goalsMet{};  // bit i: the level's goal i has been met at least once
+    std::array<int, levelCount> defended{};  // mandatory interlude cleared after the corresponding riot
     std::array<int, upgradeCount> tiers{};
     int hat = 0;
     int cone = 0;
