@@ -57,7 +57,7 @@ struct GadgetStats
 inline constexpr std::array<GadgetStats, 3> gadgets{{
     {"CONE", 12, 1.0f, 12.0f},
     {"BARRIER", 55, 205.0f, 22.0f},
-    {"VAN", 150, 690.0f, 34.0f},
+    {"OFFICER", 100, 690.0f, 34.0f},
 }};
 
 // The start story shows its short text when the game is drawn below this fraction of 1280x800 (960x600).

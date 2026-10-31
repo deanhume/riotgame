@@ -57,7 +57,7 @@ struct BotResult
 BotResult defend(GameModel& game, int column = 5, bool repairs = true, bool careful = false)
 {
     check(game.phase() == Phase::Prep, "The bot starts in prep");
-    for (int lane = 0; lane < config::lanes; ++lane)
+    for (int lane = 0; lane < game.laneCount(); ++lane)
         check(game.place(GadgetType::Barrier, lane, column), "Initial three-lane defense");
     game.ready();
     BotResult result;
@@ -66,9 +66,9 @@ BotResult defend(GameModel& game, int column = 5, bool repairs = true, bool care
         const float runToGoal = (config::goalX - GameModel::columnX(column) + config::gadgets[1].halfWidth +
                                  config::walkerSpacing * 0.5f) / config::walkerSpeed;
         const bool mustHold = careful || game.phase() != Phase::Wave || game.remaining() > runToGoal + 0.5f;
-        for (int offset = 0; offset < config::lanes && mustHold && repairs; ++offset)
+        for (int offset = 0; offset < game.laneCount() && mustHold && repairs; ++offset)
         {
-            const int lane = (offset + tick) % config::lanes;
+            const int lane = (offset + tick) % game.laneCount();
             const auto* barrier = game.gadgetAt(lane, column);
             if (!barrier)
                 game.place(GadgetType::Barrier, lane, column);
@@ -116,23 +116,37 @@ int main()
     try
     {
         IntroSequence opening;
-        check(opening.active() && opening.scene().scene == intro::Scene::Studio,
-              "Launch intro starts in the fictional studio");
-        check(std::string(opening.caption()) == intro::scenes[0].captions[0].text,
-              "The first presenter caption appears immediately");
-        opening.tick(intro::scenes[0].captions[1].start);
-        check(std::string(opening.caption()) == intro::scenes[0].captions[1].text,
+        check(opening.showingLogo() && opening.logoOpacity() == 1.0f && std::string(opening.caption()).empty(),
+              "The launch logo precedes the animation without subtitles");
+        opening.tick(intro::logoHoldSeconds);
+        check(opening.showingLogo() && opening.logoOpacity() == 1.0f && opening.sceneTime() == 0.0f,
+              "The logo stays fully visible for three seconds");
+        opening.tick(intro::logoFadeSeconds * 0.5f);
+        check(std::abs(opening.logoOpacity() - 0.5f) < 0.0001f && opening.sceneTime() == 0.0f,
+              "The logo fades without consuming the crowd scene");
+        opening.tick(intro::logoFadeSeconds * 0.5f + 0.00001f);
+        check(!opening.showingLogo(), "The logo gives way to the animated intro");
+        check(opening.active() && opening.scene().scene == intro::Scene::Crowd,
+              "Launch intro starts with the rioters");
+        check(std::string(opening.caption()).empty() && !opening.scene().heading[0],
+              "The crowd animation has no heading or caption");
+        opening.tick(intro::scenes[0].seconds - opening.sceneTime());
+        check(opening.scene().scene == intro::Scene::Studio && opening.sceneTime() < 0.001f,
+              "The fictional studio follows the crowd");
+        check(opening.fade() == 0.0f, "The studio is fully visible on arrival");
+        check(std::string(opening.caption()) == intro::scenes[1].captions[0].text,
+              "The first presenter caption appears on arrival");
+        opening.tick(intro::scenes[1].captions[1].start);
+        check(std::string(opening.caption()) == intro::scenes[1].captions[1].text,
               "The second caption replaces the first without overlap");
         opening.tick(-1);
         opening.tick(std::numeric_limits<float>::quiet_NaN());
-        check(opening.sceneTime() == intro::scenes[0].captions[1].start,
+        check(opening.sceneTime() == intro::scenes[1].captions[1].start,
               "Invalid intro deltas do not corrupt the timeline");
-        opening.tick(intro::scenes[0].seconds - opening.sceneTime());
-        check(opening.scene().scene == intro::Scene::Crowd && opening.sceneTime() == 0,
-              "The crowd scene starts at the studio boundary");
-        check(opening.cameraPosition() == 1.0f, "Camera arrives at the crowd without resetting to the studio");
-        opening.tick(intro::scenes[1].seconds);
-        check(opening.scene().scene == intro::Scene::Police, "The calm police follow the crowd");
+        opening.tick(intro::scenes[1].seconds - opening.sceneTime());
+        check(opening.scene().scene == intro::Scene::Police, "The calm police follow the presenters");
+        check(std::string(opening.caption()).empty() && !opening.scene().heading[0],
+              "The police animation has no heading or caption");
         opening.tick(intro::scenes[2].seconds);
         check(opening.scene().scene == intro::Scene::Title, "The title card follows the police");
         opening.tick(intro::scenes[3].seconds);
@@ -144,25 +158,30 @@ int main()
         fastForward.tick(intro::duration() + 1);
         check(!fastForward.active(), "A large tick safely crosses multiple scene boundaries");
         IntroSequence camera;
+        camera.tick(intro::logoHoldSeconds + intro::logoFadeSeconds);
         for (std::size_t i = 0; i + 1 < intro::scenes.size(); ++i)
         {
             const auto& scene = intro::scenes[i];
-            camera.tick(scene.seconds - scene.panSeconds);
-            check(std::abs(camera.cameraPosition() - static_cast<float>(i)) < 0.0001f,
-                  "Each panel holds still long enough to read before panning");
-            camera.tick(scene.panSeconds * 0.5f);
-            check(std::abs(camera.pan() - 0.5f) < 0.0001f, "The camera eases halfway between adjacent panels");
-            camera.tick(scene.panSeconds * 0.5f);
-            check(std::abs(camera.cameraPosition() - static_cast<float>(i + 1)) < 0.0001f,
-                  "Each pan ends exactly where the next panel begins");
+            camera.tick(scene.seconds - scene.fadeSeconds);
+            check(camera.fade() == 0.0f, "Each scene holds before fading");
+            camera.tick(scene.fadeSeconds * 0.5f);
+            check(std::abs(camera.fade() - 0.5f) < 0.0001f, "Adjacent scenes crossfade halfway");
+            camera.tick(scene.fadeSeconds * 0.5f);
+            check(camera.sceneIndex() == i + 1 && camera.fade() == 0.0f,
+                  "Each fade ends with the next scene fully visible");
         }
-        camera.tick(camera.scene().seconds - intro::menuWipeSeconds * 0.5f);
-        check(camera.menuWipe() > 0.49f && camera.menuWipe() < 0.51f,
-              "The title wipes to the menu only at the end of the sequence");
+        camera.tick(camera.scene().seconds - intro::menuFadeSeconds * 0.5f);
+        check(camera.menuFade() > 0.49f && camera.menuFade() < 0.51f,
+              "The title fades into the menu only at the end of the sequence");
         camera.skip();
-        check(camera.menuWipe() == 0.0f && camera.pan() == 0.0f,
+        check(camera.menuFade() == 0.0f && camera.fade() == 0.0f,
               "Skipping bypasses transitions immediately");
-        float introOffset = 0;
+        IntroSequence skippedLogo;
+        skippedLogo.skip();
+        skippedLogo.tick(10);
+        check(!skippedLogo.showingLogo() && skippedLogo.logoOpacity() == 0 && !skippedLogo.active(),
+              "Space skipping also immediately removes the launch logo");
+        float introOffset = intro::logoHoldSeconds + intro::logoFadeSeconds;
         for (const auto& scene : intro::scenes)
         {
             IntroSequence skipped;
@@ -239,7 +258,8 @@ int main()
         int previousCrowd = 0;
         for (const auto& level : levels)
         {
-            check(level.waves.size() >= 5 && level.waves.size() <= 8, "Each level has five to eight waves");
+            check(level.waves.size() == (&level == &levels[0] ? 1 : 6),
+                  "Only level 1 has one wave; all later riots retain six");
             for (int i = 1; i < level.waves.size(); ++i)
                 check(level.waves[i].walkers > level.waves[i - 1].walkers, "Each wave is bigger than the last");
             check(crowdSize(level) >= previousCrowd, "A later level is never easier than the one before");
@@ -285,9 +305,79 @@ int main()
               "Leaving a level for the map abandons it");
 
         // Original single-level behaviour, level 1.
+        GameModel tutorial;
+        begin(tutorial);
+        check(tutorial.waveCount() == 1, "Level 1 is a single-wave tutorial");
+        check(tutorial.laneCount() == 1 && !tutorial.place(GadgetType::Barrier, 1, 0) &&
+                  !tutorial.place(GadgetType::Barrier, 2, 0),
+              "Only the tutorial's one visible row permits placement");
+        tutorial.ready();
+        advance(tutorial, 10);
+        check(!tutorial.walkers().empty() && std::all_of(tutorial.walkers().begin(), tutorial.walkers().end(),
+                  [](const Walker& walker) { return walker.lane == 0; }),
+              "Every level 1 rioter uses its tutorial row");
+        advance(tutorial, 19);
+        check(tutorial.phase() == Phase::Won, "The tutorial completes after its first wave");
+        tutorial.nextLevel();
+        check(tutorial.phase() == Phase::DefendIntro && tutorial.campaignNumber() == 2,
+              "The one-wave tutorial still leads to defend level 2");
+        for (int index = 1; index < levelCount; ++index)
+        {
+            GameModel later;
+            begin(later, index);
+            later.ready();
+            advance(later, 6);
+            check(later.laneCount() == config::lanes && later.waveCount() == 6,
+                  "Later riots retain three lanes and six waves");
+            for (int lane = 0; lane < config::lanes; ++lane)
+                check(std::any_of(later.walkers().begin(), later.walkers().end(),
+                          [lane](const Walker& walker) { return walker.lane == lane; }),
+                      "Later riots still spawn in every lane");
+        }
+
+        GameModel funding;
+        Progress funds;
+        funds.carryCash = 90;
+        funding.setProgress(funds);
+        begin(funding);
+        check(funding.budget() == funding.startingBudget() + 90, "Cash supplements the new level allowance");
+        check(funding.cost(GadgetType::Van) == 100 && funding.maxHealth(GadgetType::Van) == 690 &&
+                  funding.place(GadgetType::Van, 0, 3) && funding.budget() == 250,
+              "A shield officer costs exactly $100 and retains the van's strength");
+        funding.debugWin();
+        const int carried = funding.progress().carryCash;
+        check(carried == 250 && parseProgress(serialize(funding.progress())).carryCash == carried,
+              "Winning saves unspent cash for the next level");
+        funding.nextLevel();
+        clearDefend(funding);
+        check(funding.progress().carryCash == carried, "Defending neither spends nor awards cash");
+        funding.nextLevel();
+        if (funding.phase() == Phase::Shop)
+            funding.closeShop();
+        check(funding.budget() == funding.startingBudget() + carried,
+              "The next riot receives leftover cash plus its starting allowance");
+        funding.beginLevel();
+        funding.ready();
+        funding.tick(config::fixedStep);
+        check(funding.budget() == funding.startingBudget() + carried,
+              "Carried money above the income cap is never discarded");
+        funding.debugLose();
+        funding.retryLevel();
+        check(funding.budget() == funding.startingBudget() + carried,
+              "A retry restores the attempt's budget without adding another cash allowance");
+        GameModel loadedFunds;
+        loadedFunds.setProgress(parseProgress(serialize(funding.progress())));
+        loadedFunds.openMap();
+        check(loadedFunds.selectCampaignLevel(2) &&
+                  loadedFunds.budget() == loadedFunds.startingBudget() + carried,
+              "Cash carry-over survives restarting and choosing the next level");
+        check(parseProgress("cash=-42").carryCash == 0 && parseProgress("cash=999999999").carryCash == 1000000 &&
+                  parseProgress("cash=invalid").carryCash == 0,
+              "Invalid cash in saves is sanitized");
+
         GameModel game;
         check(!game.place(GadgetType::Barrier, 0, 0), "Cannot build before the game starts");
-        begin(game);
+        begin(game, 1);
         check(game.place(GadgetType::Barrier, 0, 0), "Prep allows a barrier");
         const float cash = game.budget();
         check(!game.place(GadgetType::Cone, 0, 0), "Occupied cell must reject placement");
@@ -310,10 +400,10 @@ int main()
         advance(game, 21);
         check(game.phase() == Phase::Intermission, "Wave ends on its timer");
         check(game.walkers().empty(), "Survivors disperse between waves");
-        check(game.heldOff() + game.reached() == levels[0].waves[0].walkers, "Wave totals account for all walkers");
+        check(game.heldOff() + game.reached() == game.level().waves[0].walkers, "Wave totals account for all walkers");
 
         GameModel unguarded;
-        begin(unguarded);
+        begin(unguarded, 1);
         unguarded.ready();
         advance(unguarded, 240);
         check(unguarded.phase() == Phase::Lost, "An undefended target must lose");
@@ -331,14 +421,14 @@ int main()
         check(approaching.budget() == placementCash, "Crowd-overlap rejection does not charge");
         advance(approaching, 12);
         check(approaching.mood() > 0 && approaching.reached() == 0, "Proximity raises mood before a breach");
-        advance(approaching, 8.1f);
-        check(approaching.phase() == Phase::Intermission, "First undefended wave still reaches its whistle");
+        advance(approaching, approaching.remaining() + 0.1f);
+        check(approaching.phase() == Phase::Won, "The tutorial's only wave reaches its final whistle");
         const float moodAtWhistle = approaching.mood();
         advance(approaching, 2);
-        check(approaching.mood() < moodAtWhistle, "Mood recovers after the danger zone clears");
+        check(approaching.mood() == moodAtWhistle, "Mood freezes on the tutorial results screen");
 
         GameModel cone;
-        begin(cone);
+        begin(cone, 1);
         check(cone.place(GadgetType::Cone, 0, 0), "Cone placement");
         cone.ready();
         advance(cone, 5);
@@ -351,7 +441,7 @@ int main()
         check(stumbling, "Cone causes a temporary stumble");
 
         GameModel crowd;
-        begin(crowd);
+        begin(crowd, 1);
         crowd.place(GadgetType::Van, 0, 0);
         crowd.ready();
         advance(crowd, 5);
@@ -463,8 +553,8 @@ int main()
             check(campaign.phase() == Phase::Intro && campaign.levelIndex() == index,
                   name + " opens on its intro card");
             check(campaign.gadgets().empty() && campaign.walkers().empty() && campaign.mood() == 0 &&
-                  campaign.budget() == campaign.startingBudget(),
-                  name + " starts with a clean street and a fresh budget");
+                  campaign.budget() == campaign.startingBudget() + campaign.progress().carryCash,
+                  name + " starts with a clean street and its allowance plus carried money");
             campaign.beginLevel();
             defend(campaign);
             check(campaign.phase() == Phase::Won, name + " can be won in sequence");
@@ -520,7 +610,7 @@ int main()
 
         // Boredom: rioters stuck behind a wall slowly give up and go home, a few at a time.
         GameModel bored;
-        begin(bored);
+        begin(bored, 1);
         check(bored.place(GadgetType::Van, 0, 2) && bored.place(GadgetType::Barrier, 1, 2) &&
                   bored.place(GadgetType::Barrier, 2, 2),
               "A wall for the boredom test");
@@ -567,7 +657,7 @@ int main()
         check(longest - shortest > config::patienceSeconds * 0.3f, "Patience varies between rioters");
         check(leaverX == -1e9f, "A rioter who gives up walks back the way they came");
         check(bored.phase() == Phase::Intermission, "The boredom test reaches the whistle");
-        check(bored.gaveUp() == giveUps && bored.heldOff() + bored.reached() == levels[0].waves[0].walkers,
+        check(bored.gaveUp() == giveUps && bored.heldOff() + bored.reached() == bored.level().waves[0].walkers,
               "Rioters who give up count as held off, once each");
 
         GameModel stubborn;
@@ -583,7 +673,7 @@ int main()
             const std::string name = "Level " + std::to_string(index + 1);
             GameModel lobbing;
             begin(lobbing, index);
-            for (int lane = 0; lane < config::lanes; ++lane)
+            for (int lane = 0; lane < lobbing.laneCount(); ++lane)
                 check(lobbing.place(GadgetType::Barrier, lane, 6), "A line for the bricks to bounce off");
             lobbing.ready();
             int bricks = 0;
@@ -591,7 +681,7 @@ int main()
             int aimed = 0;
             for (int tick = 0; tick < 60 * 280 && lobbing.canBuild(); ++tick)
             {
-                for (int lane = 0; lane < config::lanes; ++lane)
+                for (int lane = 0; lane < lobbing.laneCount(); ++lane)
                     if (!lobbing.gadgetAt(lane, 6))
                         lobbing.place(GadgetType::Barrier, lane, 6);
                     else if (lobbing.gadgetAt(lane, 6)->health < 100.0f)
@@ -623,7 +713,7 @@ int main()
                           "An aimed brick comes down on the front of a wall within reach");
                 }
             }
-            check(bricks > 0 && aimed > 0, name + "'s crowd lobs bricks at the barriers");
+            check(bricks > 0 && (index == 0 || aimed > 0), name + "'s crowd lobs bricks");
             check(lobbing.bricksThrown() == bricks && lobbing.smokeBombsThrown() == smokeBombs,
                   name + " counts every throw");
             check((smokeBombs > 0) == (index > 0), name + (index > 0 ? " has smoke bombs" : " has no smoke bombs yet"));
@@ -650,6 +740,26 @@ int main()
               "Clearing the riot alone cannot unlock the next pair");
         GameModel resumed;
         resumed.setProgress(parseProgress(serialize(career.progress())));
+        GameModel separate;
+        separate.openMap();
+        check(!separate.selectCampaignLevel(-1) && !separate.selectCampaignLevel(12) &&
+                  !separate.selectCampaignLevel(1) && !separate.selectCampaignLevel(2),
+              "Separate levels reject invalid and locked riot/defend selections");
+        separate.setProgress(career.progress());
+        check(separate.frontierCampaignLevel() == 1 && separate.selectCampaignLevel(0) &&
+                  separate.phase() == Phase::Intro && separate.campaignNumber() == 1,
+              "Selecting riot level 1 never silently starts defend level 2");
+        separate.openMap();
+        check(separate.selectCampaignLevel(1) && separate.phase() == Phase::DefendIntro &&
+                  separate.campaignNumber() == 2, "Defend level 2 has its own selection");
+        separate.beginLevel();
+        separate.debugWin();
+        check(separate.phase() == Phase::DefendWon && separate.progress().defended[0],
+              "A defend victory waits on its success screen and saves completion");
+        separate.openMap();
+        check(separate.frontierCampaignLevel() == 2 && separate.selectCampaignLevel(2) &&
+                  separate.campaignNumber() == 3 && separate.phase() == Phase::Intro,
+              "Completing level 2 unlocks the separate riot level 3");
         resumed.openMap();
         check(resumed.frontierLevel() == 0 && resumed.selectLevel(0) && resumed.phase() == Phase::DefendIntro,
               "Reloading resumes the mandatory defend interlude without replaying the riot");
@@ -678,6 +788,10 @@ int main()
         career.beginLevel();
         check(career.place(GadgetType::Van, 0, 5), "A van for the goal test");
         check(!career.goalOnTrack(0), "Placing a van fails a no-vans goal at once");
+        for (int lane = 0; lane < career.laneCount() && career.budget() >= 275; ++lane)
+            for (int column = 0; column < config::columns && career.budget() >= 275; ++column)
+                if (!career.gadgetAt(lane, column))
+                    check(career.place(GadgetType::Barrier, lane, column), "Spend carried cash for the low-budget goal case");
         career.debugWin();
         check(career.result().stars == 1 && !career.result().goals[0] && !career.result().goals[1],
               "Clearing a level without its goals is one star");
@@ -704,7 +818,7 @@ int main()
         check(career.repairHealth() == config::repairHealth + 20.0f, "Faster repairs patch more health");
         career.closeShop();
         check(career.phase() == Phase::Intro && career.levelIndex() == 2 &&
-                  career.budget() == career.level().startingBudget + 40.0f,
+                  career.budget() == career.level().startingBudget + 40.0f + career.progress().carryCash,
               "Leaving the shop goes on to the next level with the bigger budget");
         career.openMap();
         career.openShop();
@@ -724,7 +838,8 @@ int main()
         const Progress saved = career.progress();
         const Progress parsed = parseProgress(serialize(saved));
         check(parsed.stars == saved.stars && parsed.goalsMet == saved.goalsMet && parsed.tiers == saved.tiers &&
-                  parsed.hat == saved.hat && parsed.cone == saved.cone && parsed.defended == saved.defended,
+                  parsed.hat == saved.hat && parsed.cone == saved.cone && parsed.defended == saved.defended &&
+                  parsed.carryCash == saved.carryCash,
               "Progress survives a save and load");
         const Progress damaged = parseProgress(
             "stars=9,x,-2\ngoals=255\ndefended=8,1,-1\nupgrade.barriers=7\nupgrade.nonsense=2\nhat=crown\ncone=no-such-cone\n");

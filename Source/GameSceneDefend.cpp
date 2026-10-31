@@ -113,11 +113,12 @@ void GameScene::drawDefend(PixelArt& art)
     art.rect(458, 565, 364, 31, ink);
     art.centered("POLICE LINE - PLEASE FORM A QUEUE", 640, 577, 1, yellow);
 
-    for (int i = 0; i < 13; ++i)
+    for (int row = 0; row < 4; ++row)
+    for (int i = 0; i < 24; ++i)
     {
         WalkerPose pose{};
-        pose.look = static_cast<std::uint32_t>(i + 11) * 0x9e3779b9u;
-        pose.time = time_ + static_cast<float>(i);
+        pose.look = static_cast<std::uint32_t>(row * 24 + i + 11) * 0x9e3779b9u;
+        pose.time = time_ + static_cast<float>(i + row);
         pose.balaclava = i % 3 != 0;
         pose.prop.kind = flavour::PropKind::Nothing;
         if (i % 4 == 0)
@@ -125,10 +126,11 @@ void GameScene::drawDefend(PixelArt& art)
             pose.prop.kind = flavour::PropKind::Placard;
             pose.prop.text = model_.level().placards[0];
         }
-        pose.throwing = defence.incoming() && defence.incoming()->age < 0.35f &&
-                        i == (defence.incoming()->from + 1) * 4 + 2;
-        art.walker(370.0f + static_cast<float>(i) * 44.0f, 433.0f + static_cast<float>(i % 2) * 8.0f,
-                   pose, 2.2f);
+        pose.throwing = row == 3 && defence.incoming() && defence.incoming()->age < 0.35f &&
+                        i == (defence.incoming()->from + 1) * 7 + 4;
+        art.walker(170.0f + static_cast<float>(i) * 41.0f + (row % 2 ? 18.0f : 0.0f),
+                   490.0f - static_cast<float>(row) * 19.0f + static_cast<float>(i % 2) * 5.0f,
+                   pose, 1.4f + static_cast<float>(row) * 0.27f);
     }
 
     const bool ready = defence.inReach() && model_.phase() == Phase::Defend;
@@ -243,6 +245,24 @@ void GameScene::drawDefendCard(PixelArt& art)
     const auto phase = model_.phase();
     if (phase == Phase::Defend && !paused_)
         return;
+    if (phase == Phase::DefendWon && !paused_)
+    {
+        art.rect(0, 0, 1280, 800, dark);
+        art.rect(130, 120, 1020, 560, paper);
+        art.frame(142, 132, 996, 536, ink, 4);
+        art.centered("LEVEL " + std::to_string(model_.campaignNumber()) + " COMPLETE!", 640, 580, 5, 0x387d6d);
+        art.centered("DEFEND ROUND SURVIVED", 640, 515, 3, ink);
+        art.centered("They've run out of things to throw. Time for tea.", 640, 453, 2, ink);
+        const auto& defence = model_.defence();
+        art.centered("SLICED " + std::to_string(defence.sliced()) + "   BLOCKED " +
+                     std::to_string(defence.blocked()) + "   LIVES LEFT " + std::to_string(defence.lives()),
+                     640, 385, 2, ink);
+        for (int i = 0; i < defence.lives(); ++i)
+            art.star(600.0f + static_cast<float>(i) * 40, 325, 3, 0x387d6d);
+        button(art, {236, 192, 260, 62}, "< MAP", 2, Command::Map);
+        button(art, {636, 192, 400, 62}, model_.lastLevel() ? "FINISH >" : "CONTINUE >", 2, Command::Primary);
+        return;
+    }
     art.rect(0, 55, 1280, 650, dark, 0.65f);
     art.rect(186, 152, 928, 508, dark);
     art.rect(176, 162, 928, 508, paper);
@@ -270,19 +290,13 @@ void GameScene::drawDefendCard(PixelArt& art)
     }
     else
     {
-        const bool won = phase == Phase::DefendWon;
-        art.centered(won ? "SHIFT SURVIVED!" : "OH, CRUMBS.", 640, 505, 5, won ? 0x387d6d : 0xb65850);
-        art.centered(won ? "They've run out of things to throw. Time for tea." :
-                          "Three bonks. Take a breather and try this shift again.", 640, 455, 2, ink);
+        art.centered("OH, CRUMBS.", 640, 505, 5, 0xb65850);
+        art.centered("Three bonks. Take a breather and try this shift again.", 640, 455, 2, ink);
         art.centered("SLICED " + std::to_string(defence.sliced()) + "   BLOCKED " + std::to_string(defence.blocked()) +
                      "   LIVES LEFT " + std::to_string(defence.lives()), 640, 385, 2, ink);
-        art.centered(won ? "Riot stars kept. The next part of your shift is ready." :
-                          "Your riot result is safe. Fresh shield and lives on retry.", 640, 325, 2, 0xac554e);
+        art.centered("Your riot result is safe. Fresh shield and lives on retry.", 640, 325, 2, 0xac554e);
     }
-    const std::string action = phase == Phase::DefendIntro ? "START DEFEND >" :
-                               phase == Phase::DefendLost ? "TRY AGAIN >" :
-                               model_.lastLevel() ? "FINISH >" :
-                               model_.progress().anyAffordable() ? "UPGRADES >" : "NEXT RIOT >";
+    const std::string action = phase == Phase::DefendIntro ? "START DEFEND >" : "TRY AGAIN >";
     button(art, {236, 192, 260, 62}, "< MAP", 2, Command::Map);
     button(art, {636, 192, 400, 62}, action, 2, Command::Primary);
 }

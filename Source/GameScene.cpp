@@ -61,7 +61,6 @@ constexpr std::uint32_t starOn = 0xf2b632;
 constexpr float bumpSquash = 0.35f;   // seconds of wobble after walking into a wall
 constexpr float throwGravity = 900.0f;
 constexpr float canisterLinger = 1.5f;  // a burnt-out smoke bomb lies about this long before vanishing
-constexpr std::size_t maxThrown = 60;
 constexpr std::size_t maxPuffs = 320;
 
 std::uint32_t blend(std::uint32_t from, std::uint32_t to, float amount)
@@ -91,7 +90,7 @@ std::string trackerText(const GoalDef& goal)
     case GoalType::BudgetLeft: return "END WITH $" + number(goal.amount);
     case GoalType::MaxSpend: return "SPEND $" + number(goal.amount) + " MAX";
     case GoalType::MoodBelow: return "MOOD UNDER " + number(goal.amount) + "%";
-    case GoalType::NoVans: return "NO VANS";
+    case GoalType::NoVans: return "NO OFFICERS";
     }
     return {};
 }
@@ -157,6 +156,17 @@ bool GameScene::init()
     ui_ = ax::DrawNode::create();
     addChild(world_);
     addChild(ui_, 10);
+    cinematicFade_ = ax::RenderTexture::create(config::width, config::height);
+    if (!cinematicFade_)
+    {
+        AXLOGE("Riot Control: could not create cinematic fade texture");
+        return false;
+    }
+    addChild(cinematicFade_, 11);
+    cinematicFade_->setVisible(false);
+    cinematicIncoming_ = ax::DrawNode::create();
+    addChild(cinematicIncoming_);
+    cinematicIncoming_->setVisible(false);
 
     auto* mouse = ax::EventListenerMouse::create();
     mouse->onMouseMove = [this](ax::EventMouse* event) {
@@ -208,6 +218,19 @@ bool GameScene::init()
         cinematic_.skip();
         model_.newGame((options_.startLevel - 1) / 2, options_.startLevel % 2 == 0);
     }
+    else
+    {
+        launchLogo_ = ax::Sprite::create(intro::logoFile);
+        if (!launchLogo_)
+        {
+            AXLOGE("Riot Control: could not load launch logo {}", intro::logoFile);
+            return false;
+        }
+        const auto size = launchLogo_->getContentSize();
+        launchLogo_->setScale(std::min(1100.0f / size.width, 680.0f / size.height));
+        launchLogo_->setPosition(config::width * 0.5f, config::height * 0.5f);
+        addChild(launchLogo_, 20);
+    }
     scheduleUpdate();
     return true;
 }
@@ -224,7 +247,7 @@ void GameScene::resetScene()
     particles_.clear();
     popups_.clear();
     bubbles_.clear();
-    thrown_.clear();
+    std::erase_if(thrown_, [](const Thrown& item) { return item.kind != Throwable::Brick; });
     smoke_.clear();
     fx_.clear();
     defendFx_.clear();
@@ -235,6 +258,8 @@ void GameScene::resetScene()
 
 void GameScene::changeScreen()
 {
+    if (model_.phase() == Phase::Intro || model_.phase() == Phase::DefendIntro)
+        thrown_.clear();
     resetScene();
     sound("place");
     saveIfChanged();
@@ -275,6 +300,17 @@ void GameScene::writeSmokeState()
     }
     const std::string state = std::string("phase=") + (cinematic_.active() ? "Cinematic" : phase) +
                               "\nintroScene=" + std::to_string(cinematic_.sceneIndex()) +
+                              "\nintroFade=" + std::to_string(static_cast<int>(
+                                  std::max(cinematic_.fade(), cinematic_.menuFade()) * 10)) +
+                              "\nlogo=" + (cinematic_.showingLogo() ? "1" : "0") +
+                              "\nlanes=" + std::to_string(model_.laneCount()) +
+                              "\nbudget=" + std::to_string(static_cast<int>(model_.budget())) +
+                              "\ngadgets=" + std::to_string(model_.gadgets().size()) +
+                              "\nfloorBricks=" + std::to_string(std::count_if(thrown_.begin(), thrown_.end(),
+                                  [](const Thrown& item) { return item.kind == Throwable::Brick && item.landed; })) +
+                              "\nmusic=" + (ax::AudioEngine::getState(cinematicMusic_) ==
+                                               ax::AudioEngine::AudioState::PLAYING ? "1" : "0") +
+                              "\nmusicId=" + std::to_string(cinematicMusic_) +
                               "\npaused=" + (paused_ ? "1" : "0") +
                               "\nshield=" + std::to_string(model_.defence().shieldHealth()) +
                               "\nsliced=" + std::to_string(model_.defence().sliced()) + "\n";
@@ -346,7 +382,7 @@ void GameScene::perform(Command command, int arg)
         saveIfChanged();
         return;
     case Command::Level:
-        if (!model_.selectLevel(arg))
+        if (!model_.selectCampaignLevel(arg))
         {
             sound("bonk");
             return;
@@ -384,7 +420,7 @@ void GameScene::primaryAction()
         model_.openMap();
         break;
     case Phase::Map:
-        model_.selectLevel(model_.frontierLevel());
+        model_.selectCampaignLevel(model_.frontierCampaignLevel());
         break;
     case Phase::Shop:
         model_.closeShop();
@@ -402,6 +438,7 @@ void GameScene::primaryAction()
         break;
     case Phase::Lost:
     case Phase::DefendLost:
+        thrown_.clear();
         model_.retryLevel();
         break;
     case Phase::Wave:
@@ -478,7 +515,11 @@ void GameScene::key(ax::EventKeyboard::KeyCode code)
     {
         muted_ = !muted_;
         if (muted_)
+        {
             ax::AudioEngine::stopAll();
+            cinematicMusic_ = ax::AudioEngine::INVALID_AUDIO_ID;
+            cinematicEffects_.clear();
+        }
     }
     else if (cinematic_.active())
     {
@@ -525,8 +566,14 @@ void GameScene::key(ax::EventKeyboard::KeyCode code)
         switch (model_.phase())
         {
         case Phase::Map:
-            if (digit >= 0 && digit < levelCount)
+            if (digit >= 0)
                 perform(Command::Level, digit);
+            else if (code == Key::KEY_0)
+                perform(Command::Level, 9);
+            else if (code == Key::KEY_MINUS)
+                perform(Command::Level, 10);
+            else if (code == Key::KEY_EQUAL)
+                perform(Command::Level, 11);
             else if (code == Key::KEY_S)
                 perform(Command::Shop);
             else if (code == Key::KEY_W)
@@ -564,7 +611,7 @@ std::pair<int, int> GameScene::cellAt(ax::Vec2 point) const
                                                  / config::columnSpacing));
     if (column < 0 || column >= config::columns)
         return {-1, -1};
-    for (int lane = 0; lane < config::lanes; ++lane)
+    for (int lane = 0; lane < model_.laneCount(); ++lane)
         if (std::abs(point.y - config::laneY[lane]) <= 42.0f)
             return {lane, column};
     return {-1, -1};
@@ -627,12 +674,15 @@ void GameScene::sound(const char* name, float volume)
     if (muted_ || audioFailed_)
         return;
     const std::string file = std::string("audio/") + name + ".wav";
-    if (!ax::FileUtils::getInstance()->isFileExist(file) ||
-        ax::AudioEngine::play2d(file, false, volume) == ax::AudioEngine::INVALID_AUDIO_ID)
+    const int id = ax::FileUtils::getInstance()->isFileExist(file) ?
+                       ax::AudioEngine::play2d(file, false, volume) : ax::AudioEngine::INVALID_AUDIO_ID;
+    if (id == ax::AudioEngine::INVALID_AUDIO_ID)
     {
         AXLOGE("Riot Control: could not play {}", file);
         audioFailed_ = true;
     }
+    else if (cinematic_.active())
+        cinematicEffects_.push_back(id);
 }
 
 void GameScene::burst(float x, float y, std::uint32_t color, int count)
@@ -652,8 +702,6 @@ void GameScene::burst(float x, float y, std::uint32_t color, int count)
 // on the front of a wall (aimed bricks) or on the road.
 void GameScene::launch(const Event& event)
 {
-    if (thrown_.size() >= maxThrown)
-        return;
     const float laneY = config::laneY[static_cast<std::size_t>(event.lane)];
     Thrown item{};
     item.kind = event.thrown;
@@ -784,9 +832,8 @@ void GameScene::updateThrown(float dt)
     std::erase_if(thrown_, [](const Thrown& item) {
         if (item.position.x < -40.0f || item.position.x > 1320.0f || item.position.y < -40.0f)
             return true;
-        const float lasts = item.kind == Throwable::Brick ? flavour::brickRestSeconds
-                                                          : flavour::smokeBurnSeconds + canisterLinger;
-        return item.landed && item.life >= lasts;
+        return item.kind == Throwable::SmokeBomb && item.landed &&
+               item.life >= flavour::smokeBurnSeconds + canisterLinger;
     });
 
     for (Puff& puff : smoke_)
@@ -1005,6 +1052,7 @@ void GameScene::update(float dt)
         writeSmokeState();
         return;
     }
+    updateCinematicAudio();
     if (model_.phase() == Phase::Defend)
     {
         const auto* view = renderView();
@@ -1125,8 +1173,8 @@ void GameScene::drawStreet(PixelArt& art)
     art.rect(0, 504, 1280, 6, 0xf9e7c0);
     for (int i = 0; i < 22; ++i)
         art.rect(i * 64.0f, 511, 2, 25, 0xb0b19d);
-    art.rect(0, 179, 1082, 325, 0x495d68);
-    for (int lane = 0; lane < config::lanes; ++lane)
+    art.rect(0, 179, 1082, 325, model_.laneCount() == 1 ? 0xc7bfa5 : 0x495d68);
+    for (int lane = 0; lane < model_.laneCount(); ++lane)
     {
         const float y = config::laneY[lane];
         art.rect(0, y - 44, 1082, 88, lane % 2 ? 0x4a606a : 0x4e656e);
@@ -1183,7 +1231,7 @@ void GameScene::drawStreet(PixelArt& art)
         }
     }
 
-    for (int lane = 0; lane < config::lanes; ++lane)
+    for (int lane = 0; lane < model_.laneCount(); ++lane)
     {
         for (const auto& gadget : model_.gadgets())
         {
@@ -1191,7 +1239,9 @@ void GameScene::drawStreet(PixelArt& art)
                 continue;
             const float health = gadget.health / model_.maxHealth(gadget.type);
             const float x = GameModel::columnX(gadget.column), y = config::laneY[lane];
-            art.gadget(gadget.type, x, y, health, time_, 1.0f, coneStyle);
+            const bool striking = std::any_of(model_.walkers().begin(), model_.walkers().end(),
+                [&](const Walker& walker) { return walker.pressing && walker.blockingGadget == gadget.id; });
+            art.gadget(gadget.type, x, y, health, time_, 1.0f, coneStyle, striking);
             if (gadget.type != GadgetType::Cone)
             {
                 art.rect(x - 26, y - 14, 52, 7, ink);
@@ -1215,8 +1265,7 @@ void GameScene::drawLyingThrown(PixelArt& art, int lane)
         if (!item.landed || item.lane != lane)
             continue;
         if (item.kind == Throwable::Brick)
-            art.brick(item.position.x, item.position.y,
-                      0.0f, std::clamp((flavour::brickRestSeconds - item.life) / 0.8f, 0.0f, 1.0f));
+            art.brick(item.position.x, item.position.y, 0.0f);
         else
             art.smokeBomb(item.position.x, item.position.y, 0.0f, item.colour,
                           std::clamp((flavour::smokeBurnSeconds + canisterLinger - item.life) / 0.8f, 0.0f, 1.0f));
@@ -1371,8 +1420,6 @@ void GameScene::drawHud(PixelArt& art)
     const float pipPitch = waves <= 6 ? 24.0f : 18.0f;
     for (int i = 0; i < waves; ++i)
         art.rect(174 + i * pipPitch, 708, pipPitch - 8, 12, i < wave ? mint : 0x344753);
-    art.text("HELD OFF " + number(model_.heldOff()), 342, 716, 1, muted);
-    art.text("WENT HOME " + number(model_.gaveUp()), 342, 704, 1, model_.gaveUp() > 0 ? mint : muted);
     art.rect(489, 709, 2, 70, 0x334955);
     art.text("BUDGET", 516, 762, 1, muted);
     art.text("$" + number(static_cast<int>(model_.budget())), 516, 726, 4, yellow);
@@ -1391,7 +1438,7 @@ void GameScene::drawHud(PixelArt& art)
 
     art.rect(0, 0, 1280, 168, dark);
     art.rect(0, 165, 1280, 3, 0x3c5661);
-    constexpr std::array<const char*, 4> names{"CONE", "BARRIER", "VAN", "REPAIR"};
+    constexpr std::array<const char*, 4> names{"CONE", "BARRIER", "OFFICER", "REPAIR"};
     const std::array<std::string, 4> hints{"TRIP / SINGLE USE", "YOUR MAIN WALL",
                                          number(model_.maxVans() - model_.vansPurchased()) + " LEFT THIS LEVEL",
                                          "+" + number(static_cast<int>(model_.repairHealth())) + " HEALTH"};
@@ -1610,45 +1657,49 @@ void GameScene::drawMap(PixelArt& art)
     art.centered("STARS " + number(progress.totalStars()) + "/" + number(levelCount * maxStarsPerLevel) +
                  "     UPGRADE POINTS " + number(progress.points()), 640, 648, 2, coralInk);
 
-    const int frontier = model_.frontierLevel();
-    for (int i = 0; i < levelCount; ++i)
+    const int frontier = model_.frontierCampaignLevel();
+    for (int i = 0; i < levelCount * 2; ++i)
     {
-        const LevelDef& level = levels[static_cast<std::size_t>(i)];
-        const Button tile{140.0f + static_cast<float>(i % 3) * 340.0f, i < 3 ? 410.0f : 195.0f, 320, 190};
-        const bool open = progress.levelUnlocked(i);
+        const int riot = i / 2;
+        const bool defend = i % 2 != 0;
+        const LevelDef& level = levels[static_cast<std::size_t>(riot)];
+        const Button tile{140.0f + static_cast<float>(i % 4) * 255.0f,
+                          474.0f - static_cast<float>(i / 4) * 142.0f, 235, 130};
+        const bool open = model_.campaignLevelUnlocked(i);
         const bool hot = open && inside(pointer_, tile.x, tile.y, tile.w, tile.h);
         art.rect(tile.x + 8, tile.y - 6, tile.w, tile.h, 0xb9a888);
         art.rect(tile.x, tile.y, tile.w, tile.h, !open ? 0xd8cbb0 : hot ? 0xfff6dc : panel);
         art.frame(tile.x, tile.y, tile.w, tile.h, open && i == frontier ? coralInk : ink, open && i == frontier ? 4.0f : 3.0f);
-        art.text("LEVELS " + number(i * 2 + 1) + "-" + number(i * 2 + 2), tile.x + 18, tile.y + 152, 2,
+        art.text("LEVEL " + number(i + 1) + (defend ? " DEFEND" : " RIOT"), tile.x + 12, tile.y + 102, 2,
                  open ? ink : brownInk);
-        art.text("[" + number(i + 1) + "]", tile.x + tile.w - 38, tile.y + 160, 1, brownInk);
         if (!open)
         {
-            art.padlock(tile.x + tile.w * 0.5f, tile.y + 62, 5, brownInk);
-            art.centered("CLEAR DEFEND " + number(i * 2) + " TO UNLOCK", tile.x + tile.w * 0.5f, tile.y + 34, 1, brownInk);
+            art.padlock(tile.x + tile.w * 0.5f, tile.y + 40, 4, brownInk);
+            art.centered("CLEAR LEVEL " + number(i), tile.x + tile.w * 0.5f, tile.y + 16, 1, brownInk);
             continue;
         }
-        float baseline = tile.y + 124;
-        for (const std::string& line : PixelArt::wrap(level.cause, tile.w - 36, 2))
+        float baseline = tile.y + 78;
+        for (const std::string& line : PixelArt::wrap(defend ? "Shield and baton. Hold the line!" : level.cause,
+                                                     tile.w - 24, 1))
         {
-            art.text(line, tile.x + 18, baseline, 2, coralInk);
-            baseline -= 20.0f;
+            art.text(line, tile.x + 12, baseline, 1, coralInk);
+            baseline -= 14.0f;
         }
-        const bool pending = progress.stars[i] > 0 && !progress.defended[i];
-        art.text(pending ? "NEXT: FIRST-PERSON DEFEND" : progress.defended[i] ? "RIOT + DEFEND CLEARED" : "RIOT THEN FIRST-PERSON DEFEND",
-                 tile.x + 18, tile.y + 52, 1, pending ? coralInk : brownInk);
-        for (int star = 0; star < maxStarsPerLevel; ++star)
-            drawStar(art, tile.x + 34 + static_cast<float>(star) * 36, tile.y + 26, 3,
-                     star < progress.stars[static_cast<std::size_t>(i)], false);
+        if (defend)
+            art.text(progress.defended[riot] ? "COMPLETED" : "READY TO DEFEND", tile.x + 12, tile.y + 18, 1, brownInk);
+        else
+            for (int star = 0; star < maxStarsPerLevel; ++star)
+                drawStar(art, tile.x + 24 + static_cast<float>(star) * 28, tile.y + 20, 2,
+                         star < progress.stars[static_cast<std::size_t>(riot)], false);
         if (i == frontier)
         {
             const float nudge = std::abs(std::sin(time_ * 5.0f)) * 5.0f;
-            art.text("PLAY >", tile.x + tile.w - 92 + nudge, tile.y + 20, 2, coralInk);
+            art.text("PLAY >", tile.x + tile.w - 88 + nudge, tile.y + 14, 2, coralInk);
         }
         hotspots_.push_back({tile, Command::Level, i});
     }
-    art.centered("PICK A PAIR [1-6]. SPACE CONTINUES. S SHOP, W WARDROBE.", 640, 172, 1, brownInk);
+    art.centered("LEVELS 1-9: NUMBER KEYS. 10: 0, 11: -, 12: =. SPACE CONTINUES. S SHOP, W WARDROBE.",
+                 640, 172, 1, brownInk);
     const int points = progress.points();
     button(art, {140, 95, 320, 62}, "SHOP: " + number(points) + (points == 1 ? " POINT" : " POINTS"), 2,
            Command::Shop);
@@ -1896,21 +1947,21 @@ void GameScene::drawReport(PixelArt& art)
             art.text(result.previousBest > 0 ? "NEW BEST!" : "FIRST CLEAR!", 790, 450, 2, coralInk);
     }
     else
-        art.centered("TIP: SPREAD BARRIERS ACROSS ALL LANES. REPAIR BEFORE THEY BREAK.", 640, 458, 1, brownInk);
+        art.centered(model_.laneCount() == 1 ? "TIP: HOLD THIS ONE ROW. REPAIR BEFORE BARRIERS BREAK." :
+                     "TIP: SPREAD BARRIERS ACROSS ALL LANES. REPAIR BEFORE THEY BREAK.", 640, 458, 1, brownInk);
 
     art.rect(235, 282, 810, 138, panel);
-    const std::array<std::pair<const char*, int>, 5> stats{
-        {{"RIOTERS HELD OFF", model_.heldOff()},
-         {"WENT HOME BORED", model_.gaveUp()},
-         {"COMEDY TRIPS", model_.trips()},
+    const std::array<std::pair<const char*, int>, 4> stats{
+        {{"COMEDY TRIPS", model_.trips()},
          {"STUFF LOBBED", model_.bricksThrown() + model_.smokeBombsThrown()},
-         {"SLIPPED THROUGH", model_.reached()}}};
+         {"SLIPPED THROUGH", model_.reached()},
+         {"CASH LEFT ($)", static_cast<int>(model_.budget())}}};
     for (std::size_t i = 0; i < stats.size(); ++i)
     {
         const float y = 396.0f - static_cast<float>(i) * 26.0f;
         art.text(stats[i].first, 255, y, 2, ink);
         const std::string value = number(stats[i].second);
-        art.text(value, 620 - PixelArt::textWidth(value, 2), y, 2, i + 1 == stats.size() ? coralInk : greenInk);
+        art.text(value, 620 - PixelArt::textWidth(value, 2), y, 2, i == 2 ? coralInk : greenInk);
     }
     art.rect(640, 292, 2, 118, 0xd9c9a3);
     art.text("BONUS GOALS", 662, 400, 1, coralInk);
@@ -1976,8 +2027,6 @@ void GameScene::drawFinished(PixelArt& art)
             drawStar(art, left + width + 30 + static_cast<float>(star) * 22, y + 7, 2, star < progress.stars[i], false);
     }
 
-    art.centered("RIOTERS HELD OFF: " + number(model_.totalHeldOff()) + " (" + number(model_.totalGaveUp()) +
-                 " WENT HOME BORED)", 640, 318, 2, ink);
     art.centered("COMEDY TRIPS: " + number(model_.totalTrips()) + "     STARS: " + number(progress.totalStars()) + "/" +
                  number(levelCount * maxStarsPerLevel), 640, 284, 2, ink);
     art.centered("GO BACK FOR THE STARS YOU MISSED, OR TRY ON YOUR NEW PARTY HAT.", 640, 250, 1, brownInk);

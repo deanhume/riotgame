@@ -8,7 +8,7 @@ on the town over the daftest things imaginable, from curry sauce to a cancelled
 bank holiday.
 
 Hold back the Walkers with cones, metal barriers, and a very limited fleet of
-police vans. Survive six timed waves per level without crowd mood reaching 100%.
+shield officers. Survive six timed waves per level without crowd mood reaching 100%.
 The rioters chatter in speech bubbles, wave daft placards and invented flags, and
 eventually get bored and go home. Each riot level awards up to three stars, which buy
 upgrades between levels and unlock purely cosmetic hats and cones. After each riot,
@@ -35,50 +35,61 @@ To start in a window instead, run `RiotControl.exe --windowed`.
 
 ### How a run goes
 
-A 23-second pixel-art news intro plays once per launch, before the existing
+A Big Beaver Games logo holds for three seconds and fades into the 31-second
+pixel-art news intro once per launch, before the existing
 start/menu screen. Press **Space** at any point to skip straight to the menu;
 other menu/gameplay input is ignored during the sequence. **M** still toggles
 global mute and **F11** still toggles full screen. Explicit `--level` developer
 launches bypass it. Returning to the menu does not replay it.
 
-The intro uses placeholder studio, crowd, police, and title scenes with timed
-subtitles and eased left-to-right pans. Subtitles and the skip hint stay fixed
-while adjacent panels slide past; the last card wipes directly to the menu.
+The intro opens on the rioters, fades to the fictional news presenters, then
+continues to the calm police and the title card. It uses placeholder scenes with timed
+subtitles and one-second crossfades. The scenes hold for 9, 9, 7 and 6 seconds;
+the last card fades directly into the menu.
 Presenters blink and shuffle papers, the ticker scrolls fictional headlines,
 and chunky grey bricks bonk harmlessly off the police line amid coloured smoke.
 The police sip tea while the title arrives with a brief shake and gentle pulse.
-Generated news, crowd and sting sounds respect **M**; skipping or finishing
-stops intro audio immediately.
-Edit scene durations, outgoing `panSeconds`, animation/gag settings, captions, fictional
+An original '80s retro-rock theme plays continuously across the scenes and into
+the main menu, with crunchy guitar-style power chords, melodic guitar hooks,
+driving bass and a big drum backbeat.
+Generated news, crowd and sting effects sit over the music. All audio respects **M**;
+skipping or finishing stops the intro effects but keeps the music playing.
+Music stops when leaving the main menu. The music is generated locally by
+`tools\generate_audio.py`, not taken from an existing game's soundtrack.
+Edit scene durations, outgoing `fadeSeconds`, animation/gag settings, captions, fictional
 channel branding and headlines in `Source\IntroSequence.h`; drawings live
 separately in `Source\GameSceneCinematic.cpp`.
+The white splash uses `Source\big-beaver-games-logo.png`, fitted without stretching;
+its hold and fade durations are also in `IntroSequence.h`.
 
-Start screen (the story and a START button) → **map** (pick a pair) → riot intro
-card → prep → six waves → riot report → defend intro → first-person barrage →
+Start screen (the story and a START button) → **map** (pick a level) → riot intro
+card → prep → waves (one in level 1, six in later riots) → riot report → defend intro → first-person barrage →
 defend report → (upgrade shop) → next riot intro card → ...
 → defend level 12 → **"You saved the nation"** end screen, which lists every riot's
 result and best stars. Each intro card shows the level number, the daft cause,
 the target the crowd is marching on, your best stars so far, the level's two
 bonus goals, and a heads-up about what the crowd will throw. Each report shows the
-stars earned, how many rioters you held off (and how many went home bored), how
-much they lobbed at you, the bonus goals met, and a silly summary line for
+stars earned, trips, objects lobbed, rioters who slipped through, remaining cash,
+the bonus goals met, and a silly summary line for
 that level ("Curry sauce saved: 1 bottle").
 
-The map shows six pairs: riot levels **1, 3, 5, 7, 9, 11**, each followed by defend
-levels **2, 4, 6, 8, 10, 12**. The first pair is always open; the next opens once
-both parts of the previous pair have been cleared. Cleared pairs can be replayed
-for more riot stars. Space on the map plays the next pair
+The map shows twelve separate levels in order: riot levels **1, 3, 5, 7, 9, 11**,
+each followed by defend levels **2, 4, 6, 8, 10, 12**. Level 1 is always open;
+each completed level unlocks the next. Riot levels can be replayed
+for more stars without automatically selecting their defend level. Space on the map plays the next level
 that still needs clearing (or still lacks three stars).
 
 Defend interludes are mandatory but award no separate stars or upgrade points.
-If you leave or lose during one, your riot result is safe. Selecting that pair
-on the map resumes its pending defend intro, even after restarting the game.
+If you leave or lose during one, your riot result is safe. Select its separate
+defend tile to resume, even after restarting the game. A full-screen completion
+card confirms a successful defence before continuing.
 Existing saves keep their riot stars, upgrades and cosmetics; their new defend
 interludes start uncleared.
 
 If the crowd mood maxes out you lose and can **try the same level again**: it
-restarts from a clean street, budget, and van allowance. Every level starts that
-way; only stars, upgrades, and cosmetics carry over.
+restarts from a clean street with the attempt's starting budget and officer
+allowance restored. Unspent cash from a successful riot is saved, survives the
+defend round, and is added to the next riot's starting allowance.
 
 The start screen shows the full story, or a shorter version when the playfield
 is drawn smaller than 960x600 pixels (for example in a small window).
@@ -86,8 +97,8 @@ is drawn smaller than 960x600 pixels (for example in a small window).
 ### Stars, upgrades and the wardrobe
 
 - **Stars:** clearing a level earns 1 star, plus 1 for each of its two bonus
-  goals met in the same run (lose no barriers or vans, finish with money in the
-  bank, keep the crowd mood under a set level, or win without a police van). The
+  goals met in the same run (lose no barriers or officers, finish with money in the
+  bank, keep the crowd mood under a set level, or win without a shield officer). The
   goals and how they are going are shown on the intro card and in the HUD.
 - **Upgrade points:** 1 point per star, counted from your best result on each
   level, so replaying a level only pays out for stars you did not have before.
@@ -125,20 +136,23 @@ Walker, and later levels have more stubborn crowds.
 
 Plenty of Walkers (about 60%) turn up in black knitted balaclavas. During waves
 the crowd lobs **bricks** (aimed bricks bonk off the front of your walls) and,
-from level 2 on, **smoke bombs** that land in the road and fizz like flares in
+from riot level 3 on, **smoke bombs** that land in the road and fizz like flares in
 bright coloured smoke. Each level throws a bit more than the last; the level's
 intro card says what to expect. Bricks and smoke are purely for show: they never
 damage gadgets, raise mood or cost money, and they don't change the crowd.
+Landed bricks stay on the street between waves and are cleared when a new level
+or retry starts. Brick and smoke throw rates are doubled from the earlier pacing.
 
 ### Controls
 
 | Control | Action |
 | --- | --- |
-| Click a gadget card / `1`-`4` | Select cone, barrier, van, or repair |
+| Click a gadget card / `1`-`4` | Select cone, barrier, shield officer, or repair |
 | Click / tap a street tile | Place the selected gadget (or repair it with `4`) |
 | Right-click a gadget | Quick repair |
 | Space / Enter | Press the screen's main button (START, START LEVEL, NEXT LEVEL, TRY AGAIN, ...), ready the next wave, or pause/resume |
-| `1`-`6` / `S` / `W` on the map | Pick a level / open the shop / open the wardrobe |
+| `1`-`9`, `0`, `-`, `=` on the map | Pick levels 1-12 respectively |
+| `S` / `W` on the map | Open the shop / open the wardrobe |
 | Hold Space during defend | Raise the riot shield |
 | Left / Right arrow during defend | Timed baton swipe in either direction |
 | Enter during defend | Pause/resume (Space is reserved for the shield) |
@@ -154,22 +168,28 @@ damage gadgets, raise mood or cost money, and they don't change the crowd.
 These street rules apply to riot levels. See **First-person defend** below for
 the alternating interludes.
 
-There are three independent lanes. Walkers push into obstacles rather than
+Level 1 is a single-row, single-wave tutorial with four rioters.
+All later riot levels retain three independent lanes and their existing waves.
+Walkers push into obstacles rather than
 pathfinding around them. Queued Walkers add pressure, so a crowd damages a wall
 faster than one Walker. Cones trip one Walker and disappear. Repairs restore
 85 health for $20 (more with the faster repairs upgrade); no charge for an
-undamaged gadget. Only two vans can be purchased per level, even if they break.
+undamaged gadget. Only two shield officers can be purchased per level, even if
+their shields break. They cost **$100** each and retain the van's **690 health**.
+Their baton animation plays while holding back a crowd; it adds no extra damage.
 
-**Economy:** every level starts with $260 (more with the bigger budget upgrade);
-earn **$10 per second during waves**, capped at $420. No income during prep or
-tea breaks, and no per-Walker rewards.
+**Economy:** every riot starts with its $260 allowance (more with the bigger
+budget upgrade), plus cash left after the last successful riot. This carry-over
+is saved between sessions. Earn **$10 per second during waves**, up to $420;
+carried balances above that are kept but earn nothing until spent below the cap.
+No income during prep, tea breaks or defend rounds, and no per-Walker rewards.
 
 **Timed waves:** when the whistle blows, every remaining Walker disperses and
 counts as held off. Walkers reaching the target raise mood and do not count.
 Mood also rises in the marked danger zone and slowly recovers when it is empty.
 Gadgets and their damage persist between waves. The last whistle wins the level.
 
-Tip: spread your initial defense across all three lanes. Timing matters:
+Tip: after the single-row tutorial, spread your initial defense across all three lanes. Timing matters:
 sometimes there is no need to repair a wall if the crowd cannot reach the
 target before the whistle.
 
@@ -207,10 +227,11 @@ level so a held shield cannot get stuck while you are away.
 | 9 / 10 | The village hall has run out of biscuits! | The village hall tea urn |
 | 11 / 12 | The bank holiday has been cancelled. Nobody knows why. | The town hall |
 
-All six use the same mechanics (Walkers only; cone, barrier, and van). Each
-level has six waves and a gentle ramp: roughly 195 Walkers in level 1 up to
-roughly 249 in riot level 11, about 5% more per riot. The final wave is the same size
-in every level, because the damage a crowd does grows with the square of its
+All six use the same mechanics (Walkers only; cone, barrier, and shield officer).
+Level 1 has four Walkers in one tutorial wave in one row. Later riots keep
+their existing three-lane waves, reaching 249 Walkers in riot level 11.
+The final wave in those later riots is the same size,
+because the damage a crowd does grows with the square of its
 length, so a bigger finale makes a level unwinnable very quickly.
 
 ### Developer switches
@@ -282,8 +303,8 @@ once and for how long, the odds of each prop, the generic placards, the placard
 colours, and the flags. Every flag and sign is invented; keep it that way. It
 also holds the share of Walkers in balaclavas (`balaclavaPercent`) and their
 colours, and the look of thrown things: smoke colours, how long a smoke bomb
-burns, how much smoke and how many sparks it gives off, and how long a brick
-lies in the road. `GameConfig.h` has how far the crowd can throw (`throwShortest`,
+burns, and how much smoke and how many sparks it gives off. Bricks remain until
+the next level. `GameConfig.h` has how far the crowd can throw (`throwShortest`,
 `throwLongest`, `throwReach`).
 
 **Progression is data.** `Source\Progression.h` holds the bonus goal types, the
@@ -329,7 +350,7 @@ palette to change the branding.
 Model checks cover the level data (five to eight waves, each bigger than the
 last, no level easier than the one before), the campaign flow (title, intro,
 prep, win, next level, end screen, back to the title), blocking, crowd pressure,
-cones, economy, repair limits, van limits, timed dispersal, an undefended loss,
+cones, economy, repair limits, officer limits, timed dispersal, an undefended loss,
 retry resetting the level, and the debug shortcuts. They also cover boredom
 (stuck Walkers grumble, then go home a few at a time and count as held off),
 thrown bricks and smoke bombs (thrown forward by marching Walkers, aimed bricks

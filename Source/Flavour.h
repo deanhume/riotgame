@@ -213,6 +213,5 @@ inline constexpr float smokeBurnSeconds = 6.0f;      // how long a smoke bomb fi
 inline constexpr float smokePuffsPerSecond = 14.0f;
 inline constexpr float smokePuffSeconds = 2.8f;      // how long one puff of smoke hangs about
 inline constexpr float smokeSparksPerSecond = 28.0f;
-inline constexpr float brickRestSeconds = 4.0f;      // a brick lies in the road this long before it's tidied away
 inline constexpr float throwArmSeconds = 0.35f;      // how long the thrower's arm stays up
 }

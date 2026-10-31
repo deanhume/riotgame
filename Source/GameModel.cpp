@@ -108,7 +108,7 @@ float GameModel::throwGap(float perMinute)
 
 void GameModel::resetLevel()
 {
-    budget_ = startingBudget();
+    budget_ = startingBudget() + static_cast<float>(progress_.carryCash);
     mood_ = 0.0f;
     peakMood_ = 0.0f;
     remaining_ = level().prepSeconds;
@@ -224,6 +224,29 @@ void GameModel::openShop()
     shopFrom_ = phase_;
     phase_ = Phase::Shop;
     feedback_.clear();
+}
+
+bool GameModel::campaignLevelUnlocked(int index) const
+{
+    return index >= 0 && index < levelCount * 2 && progress_.levelUnlocked(index / 2) &&
+           (index % 2 == 0 || progress_.stars[index / 2] > 0);
+}
+
+bool GameModel::selectCampaignLevel(int index)
+{
+    if (phase_ != Phase::Map || !campaignLevelUnlocked(index))
+        return false;
+    levelIndex_ = index / 2;
+    enterIntro();
+    if (index % 2 != 0)
+        enterDefend();
+    return true;
+}
+
+int GameModel::frontierCampaignLevel() const
+{
+    const int index = frontierLevel();
+    return index * 2 + (progress_.stars[index] > 0 && !progress_.defended[index] ? 1 : 0);
 }
 
 void GameModel::closeShop()
@@ -443,6 +466,7 @@ void GameModel::finishWave()
 
 void GameModel::completeLevel()
 {
+    progress_.carryCash = static_cast<int>(std::floor(budget_));
     phase_ = Phase::Won;
     remaining_ = 0.0f;
     totalHeldOff_ += heldOff_;
@@ -539,12 +563,12 @@ std::string GameModel::placementError(GadgetType type, int lane, int column) con
 {
     if (!canBuild())
         return "WAIT FOR THE NEXT LEVEL.";
-    if (lane < 0 || lane >= config::lanes || column < 0 || column >= config::columns)
+    if (lane < 0 || lane >= laneCount() || column < 0 || column >= config::columns)
         return "PLACE ON A STREET TILE.";
     if (gadgetAt(lane, column))
         return "TILE OCCUPIED. USE [4] TO REPAIR.";
     if (type == GadgetType::Van && vansPurchased_ >= maxVans())
-        return "ONLY " + std::to_string(maxVans()) + (maxVans() == 1 ? " VAN" : " VANS") +
+        return "ONLY " + std::to_string(maxVans()) + (maxVans() == 1 ? " OFFICER" : " OFFICERS") +
                " PER LEVEL. EVEN IF THEY BREAK.";
     if (budget_ < static_cast<float>(cost(type)))
         return "NOT ENOUGH CASH. BUDGET REFILLS DURING WAVES.";
@@ -811,12 +835,12 @@ void GameModel::tick(float dt)
         return;
     }
 
-    budget_ = std::min(config::budgetCap, budget_ + config::budgetPerSecond * dt);
+    budget_ += std::min(config::budgetPerSecond * dt, std::max(0.0f, config::budgetCap - budget_));
     spawnTimer_ -= dt;
     const auto& wave = level().waves[waveIndex_];
     while (spawnTimer_ <= 0.0f && spawned_ < wave.walkers)
     {
-        const int lane = (spawned_ + waveIndex_) % config::lanes;
+        const int lane = (spawned_ + waveIndex_) % laneCount();
         float spawn = config::spawnX;
         for (const auto& walker : walkers_)
             if (walker.lane == lane && !walker.leaving)

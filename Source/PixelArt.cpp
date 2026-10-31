@@ -746,7 +746,8 @@ void PixelArt::walker(float x, float y, const WalkerPose& pose, float scale)
     }
 }
 
-void PixelArt::gadget(GadgetType type, float x, float y, float health, float time, float scale, ConeArt cone)
+void PixelArt::gadget(GadgetType type, float x, float y, float health, float time, float scale, ConeArt cone,
+                      bool striking)
 {
     auto px = [&](float dx, float dy, float w, float h, std::uint32_t c) {
         rect(x + dx * scale, y + dy * scale, w * scale, h * scale, c);
@@ -813,28 +814,32 @@ void PixelArt::gadget(GadgetType type, float x, float y, float health, float tim
             px(-2, 12, 5, 12, 0x344551);
         return;
     }
-    px(-38, -4, 76, 6, 0x243742);
-    px(-33, 0, 14, 14, palette::dark);
-    px(19, 0, 14, 14, palette::dark);
-    px(-29, 4, 6, 6, 0x9bacb2);
-    px(23, 4, 6, 6, 0x9bacb2);
-    px(-37, 12, 74, 29, 0xc3d9d7);
-    px(-33, 40, 53, 14, 0xe7eddb);
-    px(-36, 18, 72, 10, 0x476eb0);
-    for (int i = 0; i < 5; ++i)
-        px(-29 + static_cast<float>(i) * 14, 18, 7, 5, palette::yellow);
-    px(-26, 35, 25, 13, 0x386278);
-    px(7, 34, 19, 14, 0x386278);
-    px(-23, 44, 18, 2, 0x8cbdc7);
-    px(-37, 29, 5, 7, palette::coral);
-    px(31, 28, 6, 8, palette::yellow);
-    px(-7, 54, 19, 4, palette::ink);
-    px(-6, 58, 8, 5, static_cast<int>(time * 3) % 2 ? palette::blue : palette::paper);
-    px(3, 58, 8, 5, static_cast<int>(time * 3) % 2 ? palette::paper : palette::coral);
+    scale *= 0.8f;
+    const float swing = striking ? std::max(0.0f, std::sin(time * 12.0f + x * 0.02f)) : 0.0f;
+    px(-30, -4, 60, 6, 0x243742);
+    px(-5, 0, 12, 8, palette::ink);
+    px(12, 0, 12, 8, palette::ink);
+    px(-4, 8, 28, 29, 0x476da3);
+    px(-4, 11, 28, 5, palette::ink);
+    px(-1, 37, 22, 18, 0xf1bd92);
+    px(-6, 53, 32, 7, palette::ink);
+    px(-2, 60, 24, 8, palette::ink);
+    px(-6, 41, 28, 12, 0x9cbcc5);
+    px(-4, 44, 24, 7, 0xc0e1dc);
+    px(-6, 41, 3, 13, palette::paper);
+    px(-30, 7, 25, 40, palette::ink);
+    px(-27, 10, 19, 34, 0x7394a3);
+    px(-25, 27, 15, 14, 0xc0e1dc);
+    px(-25, 15, 15, 7, palette::ink);
+    px(-23, 17, 11, 3, palette::paper);
+    px(20 - swing * 11, 27 + swing * 6, 10, 9, 0xf1bd92);
+    for (int i = 0; i < 7; ++i)
+        px(22 - swing * (12 + static_cast<float>(i) * 6),
+           34 + static_cast<float>(i) * (4 - swing * 5), 5, 6, palette::ink);
     if (health < 0.4f)
     {
-        px(17, 29, 2, 13, palette::ink);
-        px(13, 34, 7, 3, palette::ink);
+        px(-21, 28, 2, 9, palette::ink);
+        px(-23, 30, 7, 2, palette::ink);
     }
 }
 

@@ -88,4 +88,7 @@ add_custom_target(RiotResources ALL
         "${RIOT_AUDIO_DIR}" "$<TARGET_FILE_DIR:RiotControl>/audio"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${RIOT_BRANDING_DIR}" "$<TARGET_FILE_DIR:RiotControl>/branding"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source/big-beaver-games-logo.png"
+        "$<TARGET_FILE_DIR:RiotControl>/branding/big-beaver-games-logo.png"
     DEPENDS RiotControl RiotAudio)

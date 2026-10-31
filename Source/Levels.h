@@ -57,6 +57,7 @@ struct LevelDef
     float startingBudget = config::startingBudget;
     int maxVans = config::maximumVans;
     float prepSeconds = config::prepSeconds;
+    int lanes = config::lanes;
 };
 
 inline constexpr int levelCount = 6;
@@ -74,13 +75,14 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .defeat = "They have asked to speak to the chip manager.",
         .look = {TargetArt::Chippy, "THE CHIPPY", "FISH / CHIPS / CHAOS",
                  {"SAUCE", "SOLD OUT!"}, {"OPEN", "ISH"}},
-        .waves = config::withCrowds({12, 18, 27, 36, 45, 57}),
+        .waves = config::withCrowds({4}),
         .placards = {"CURRY SAUCE NOW!", "CURRY SAWCE NOW!", "SAUCE IS LIFE"},
         .nearTarget = {"My curry sauce!", "I can smell the sauce!"},
         .goals = {{{GoalType::NoBarriersLost}, {GoalType::MoodBelow, 15}}},
         .patienceDrain = 1.15f,
-        .bricksPerMinute = 6.0f,
+        .bricksPerMinute = 12.0f,
         .crowdNote = "They've brought bricks. They can't throw for toffee.",
+        .lanes = 1,
     },
     {
         .cause = "The last sausage roll has been sold!",
@@ -96,8 +98,8 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .nearTarget = {"My sausage roll!", "Is that a pasty?"},
         .goals = {{{GoalType::NoVans}, {GoalType::BudgetLeft, 275}}},
         .patienceDrain = 1.05f,
-        .bricksPerMinute = 8.0f,
-        .smokeBombsPerMinute = 1.5f,
+        .bricksPerMinute = 16.0f,
+        .smokeBombsPerMinute = 3.0f,
         .crowdNote = "New: smoke bombs! Very fizzy, totally harmless.",
     },
     {
@@ -114,8 +116,8 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .nearTarget = {"My bins!", "Where do I complain?"},
         .goals = {{{GoalType::NoBarriersLost}, {GoalType::NoVans}}},
         .patienceDrain = 1.0f,
-        .bricksPerMinute = 10.0f,
-        .smokeBombsPerMinute = 2.5f,
+        .bricksPerMinute = 20.0f,
+        .smokeBombsPerMinute = 5.0f,
         .crowdNote = "More smoke bombs. Someone found a bulk-buy offer.",
     },
     {
@@ -132,8 +134,8 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .nearTarget = {"My pizza!", "Hold the pineapple!"},
         .goals = {{{GoalType::MoodBelow, 10}, {GoalType::BudgetLeft, 225}}},
         .patienceDrain = 0.95f,
-        .bricksPerMinute = 12.0f,
-        .smokeBombsPerMinute = 3.5f,
+        .bricksPerMinute = 24.0f,
+        .smokeBombsPerMinute = 7.0f,
         .crowdNote = "Even more smoke. Luigi can't see his oven.",
     },
     {
@@ -150,8 +152,8 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .nearTarget = {"My biscuits!", "Put the kettle on!"},
         .goals = {{{GoalType::NoBarriersLost}, {GoalType::MoodBelow, 20}}},
         .patienceDrain = 0.9f,
-        .bricksPerMinute = 14.0f,
-        .smokeBombsPerMinute = 5.0f,
+        .bricksPerMinute = 28.0f,
+        .smokeBombsPerMinute = 10.0f,
         .crowdNote = "So much smoke. Nobody can find the biscuits.",
     },
     {
@@ -168,8 +170,8 @@ inline constexpr std::array<LevelDef, levelCount> levels{{
         .nearTarget = {"My day off!", "I had plans!"},
         .goals = {{{GoalType::NoVans}, {GoalType::NoBarriersLost}}},
         .patienceDrain = 0.85f,
-        .bricksPerMinute = 16.0f,
-        .smokeBombsPerMinute = 6.5f,
+        .bricksPerMinute = 32.0f,
+        .smokeBombsPerMinute = 13.0f,
         .crowdNote = "Maximum fizz. Bring a hanky.",
     },
 }};
@@ -181,6 +183,7 @@ constexpr bool levelsValid()
         if (!level.cause[0] || !level.target[0] || !level.summaryLabel[0] || !level.summaryValue[0] ||
             !level.victory[0] || !level.defeat[0] || level.waves.count < 1 ||
             level.waves.count > config::maxWavesPerLevel || level.maxVans < 0 ||
+            level.lanes < 1 || level.lanes > config::lanes ||
             level.startingBudget < 0.0f || level.prepSeconds <= 0.0f || !level.nearTarget[0] ||
             level.patienceDrain <= 0.0f || level.bricksPerMinute < 0.0f || level.smokeBombsPerMinute < 0.0f)
             return false;
@@ -211,7 +214,7 @@ inline constexpr auto startCopy = std::to_array<CopyLine>({
     {CopyStyle::Body, "only thing standing in their way."},
     {CopyStyle::Gap, ""},
     {CopyStyle::Heading, "YOUR JOB"},
-    {CopyStyle::Bullet, "Place cones, barriers and vans to block their path"},
+    {CopyStyle::Bullet, "Place cones, barriers and shield officers to block their path"},
     {CopyStyle::Bullet, "Spend your budget wisely - you can't afford everything"},
     {CopyStyle::Bullet, "Keep building and repairing as the waves roll in"},
     {CopyStyle::Bullet, "Don't let the crowd reach their target"},

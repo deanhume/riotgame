@@ -5,6 +5,8 @@
 #include "IntroSequence.h"
 #include "PixelArt.h"
 #include "2d/Scene.h"
+#include "2d/Sprite.h"
+#include "2d/RenderTexture.h"
 #include "base/EventKeyboard.h"
 
 #include <filesystem>
@@ -179,6 +181,10 @@ private:
     Phase shownPhase_ = Phase::Title;
     ax::DrawNode* world_ = nullptr;
     ax::DrawNode* ui_ = nullptr;
+    ax::Sprite* launchLogo_ = nullptr;
+    ax::RenderTexture* cinematicFade_ = nullptr;
+    ax::DrawNode* cinematicIncoming_ = nullptr;
+    std::size_t cinematicFadeScene_ = intro::scenes.size();
     ax::Vec2 pointer_{-100, -100};
     std::vector<Particle> particles_;
     std::vector<Popup> popups_;
@@ -213,5 +219,7 @@ private:
     std::string smokeState_;
     std::size_t cinematicSoundScene_ = intro::scenes.size();
     int cinematicSoundBeat_ = -1;
+    int cinematicMusic_ = -1;
+    std::vector<int> cinematicEffects_;
 };
 }

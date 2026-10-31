@@ -57,7 +57,7 @@ public:
     void micro(std::string_view value, float x, float y, int scale, std::uint32_t color);
     void walker(float x, float y, const WalkerPose& pose, float scale = 2.0f);
     void gadget(GadgetType type, float x, float y, float health, float time, float scale = 1.0f,
-                ConeArt cone = ConeArt::Classic);
+                ConeArt cone = ConeArt::Classic, bool striking = false);
     void wrench(float x, float y, std::uint32_t color);
     // A brick centred on (x, y), 12x6 pixels lying flat; `spin` (in turns) tumbles it through four poses.
     void brick(float x, float y, float spin, float alpha = 1.0f);

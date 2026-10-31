@@ -19,7 +19,7 @@ enum class Phase
     Title, Map, Shop, Wardrobe, Intro, Prep, Wave, Intermission, Won, Lost,
     DefendIntro, Defend, DefendWon, DefendLost, Finished
 };
-enum class GadgetType { Cone, Barrier, Van };
+enum class GadgetType { Cone, Barrier, Van }; // Van retains its legacy slot for the shield officer.
 enum class Throwable { Brick, SmokeBomb };
 enum class EventType
 {
@@ -97,6 +97,9 @@ public:
     void newGame(int index = 0, bool defend = false);
     void openMap();
     bool selectLevel(int index);
+    bool campaignLevelUnlocked(int index) const;
+    bool selectCampaignLevel(int index);
+    int frontierCampaignLevel() const;
     void openShop();
     void closeShop();
     void openWardrobe();
@@ -154,6 +157,7 @@ public:
     const LevelDef& level() const { return levels[static_cast<std::size_t>(levelIndex_)]; }
     bool lastLevel() const { return levelIndex_ + 1 == levelCount; }
     int waveCount() const { return level().waves.size(); }
+    int laneCount() const { return level().lanes; }
     int maxVans() const { return level().maxVans; }
     float budget() const { return budget_; }
     float mood() const { return mood_; }

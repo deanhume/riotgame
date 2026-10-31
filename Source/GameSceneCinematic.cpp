@@ -1,6 +1,8 @@
 #include "GameScene.h"
 
 #include "audio/AudioEngine.h"
+#include "base/Director.h"
+#include "platform/FileUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,12 +58,12 @@ void streetBackdrop(PixelArt& art)
 void comedyThrows(PixelArt& art, float time, bool police)
 {
     using namespace palette;
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 6; ++i)
     {
-        const float t = std::fmod(time + static_cast<float>(i) * 0.55f, intro::animation::throwPeriod) /
+        const float t = std::fmod(time + static_cast<float>(i) * 0.19f, intro::animation::throwPeriod) /
                         intro::animation::throwPeriod;
         const float start = police ? 30.0f : 480.0f;
-        const float impact = police ? 500.0f + static_cast<float>(i) * 190 : 1090.0f;
+        const float impact = police ? 500.0f + static_cast<float>(i) * 95 : 1090.0f;
         const float x = t < 0.7f ? start + (impact - start) * t / 0.7f : impact - (t - 0.7f) * 320;
         const float y = t < 0.7f ? 340 + std::sin(t / 0.7f * 3.141593f) * 180 :
                                   340 + std::sin((t - 0.7f) / 0.3f * 3.141593f) * 65 - (t - 0.7f) * 180;
@@ -73,7 +75,7 @@ void comedyThrows(PixelArt& art, float time, bool police)
     }
     const float smoke = std::fmod(time, intro::animation::smokePeriod);
     if (smoke > 1.0f)
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 14; ++i)
         {
             const float age = smoke - 1.0f;
             const float x = 850 + static_cast<float>(i % 4) * 55 + age * 32;
@@ -81,6 +83,21 @@ void comedyThrows(PixelArt& art, float time, bool police)
             art.puff(x, y, 25 + age * 24, flavour::smokeColours[static_cast<std::size_t>(i) %
                      flavour::smokeColours.size()], std::max(0.0f, 0.65f - age * 0.14f));
         }
+
+}
+
+void drawCinematicCaptions(PixelArt& art, const char* caption)
+{
+    if (!caption[0])
+        return;
+    art.rect(30, 68, 1220, 83, palette::ink);
+    const auto lines = PixelArt::wrap(caption, 1150, 2);
+    float y = lines.size() > 1 ? 117.0f : 100.0f;
+    for (const auto& line : lines)
+    {
+        art.centered(line, 640, y, 2, palette::paper);
+        y -= 26;
+    }
 }
 
 void drawCinematicPanel(PixelArt& art, const intro::SceneDef& scene, float time)
@@ -186,7 +203,7 @@ void drawCinematicPanel(PixelArt& art, const intro::SceneDef& scene, float time)
     }
     }
 
-    if (scene.scene != intro::Scene::Studio && scene.scene != intro::Scene::Title)
+    if (scene.heading[0] && scene.scene != intro::Scene::Studio && scene.scene != intro::Scene::Title)
     {
         art.rect(0, 697, 1280, 57, ink);
         art.centered(scene.heading, 640, 717, 3, yellow);
@@ -197,7 +214,12 @@ void drawCinematicPanel(PixelArt& art, const intro::SceneDef& scene, float time)
 void GameScene::finishCinematic()
 {
     cinematic_.skip();
-    ax::AudioEngine::stopAll();
+    cinematicFade_->setVisible(false);
+    if (launchLogo_)
+        launchLogo_->setVisible(false);
+    for (const int id : cinematicEffects_)
+        ax::AudioEngine::stop(id);
+    cinematicEffects_.clear();
     resetScene();
     screenTime_ = 0.0f;
     time_ = 0.0f;
@@ -206,12 +228,35 @@ void GameScene::finishCinematic()
 
 void GameScene::updateCinematicAudio()
 {
+    if (!cinematic_.active() && model_.phase() != Phase::Title)
+    {
+        if (cinematicMusic_ != ax::AudioEngine::INVALID_AUDIO_ID)
+        {
+            ax::AudioEngine::stop(cinematicMusic_);
+            cinematicMusic_ = ax::AudioEngine::INVALID_AUDIO_ID;
+        }
+        return;
+    }
+    if (cinematic_.showingLogo())
+        return;
+    if (!muted_ && !audioFailed_ && cinematicMusic_ == ax::AudioEngine::INVALID_AUDIO_ID)
+    {
+        constexpr const char* file = "audio/intro_music.wav";
+        if (ax::FileUtils::getInstance()->isFileExist(file))
+            cinematicMusic_ = ax::AudioEngine::play2d(file, true, intro::musicVolume);
+        if (cinematicMusic_ == ax::AudioEngine::INVALID_AUDIO_ID)
+        {
+            AXLOGE("Riot Control: could not play {}", file);
+            audioFailed_ = true;
+        }
+    }
+    if (!cinematic_.active())
+        return;
     const auto index = cinematic_.sceneIndex();
     const auto scene = cinematic_.scene().scene;
     const bool entered = index != cinematicSoundScene_;
     if (entered)
     {
-        ax::AudioEngine::stopAll();
         cinematicSoundScene_ = index;
         cinematicSoundBeat_ = -1;
         if (scene == intro::Scene::Studio)
@@ -235,31 +280,48 @@ void GameScene::updateCinematicAudio()
 void GameScene::drawCinematic(PixelArt& art)
 {
     using namespace palette;
+    if (launchLogo_)
+    {
+        launchLogo_->setVisible(cinematic_.showingLogo());
+        launchLogo_->setOpacity(static_cast<std::uint8_t>(std::lround(cinematic_.logoOpacity() * 255)));
+    }
     const auto index = cinematic_.sceneIndex();
-    const float camera = cinematic_.cameraPosition();
-    PixelArt current(ui_, 1.0f, (static_cast<float>(index) - camera) * config::width, true);
-    drawCinematicPanel(current, intro::scenes[index], cinematic_.sceneTime());
-    if (cinematic_.pan() > 0.0f && index + 1 < intro::scenes.size())
+    drawCinematicPanel(art, intro::scenes[index], cinematic_.sceneTime());
+    cinematicFade_->setVisible(false);
+    if (cinematic_.showingLogo())
     {
-        PixelArt next(ui_, 1.0f, (static_cast<float>(index + 1) - camera) * config::width, true);
-        drawCinematicPanel(next, intro::scenes[index + 1], 0.0f);
+        art.rect(0, 0, config::width, config::height, 0xffffff, cinematic_.logoOpacity());
+        art.text(intro::skipHint, 1020, 28, 1, muted);
+        return;
     }
-    // The title wipes away to the actual menu, rather than fading through a blank frame.
-    if (cinematic_.menuWipe() > 0.0f)
+    drawCinematicCaptions(art, cinematic_.caption());
+    const float fade = std::max(cinematic_.fade(), cinematic_.menuFade());
+    if (fade > 0.0f)
     {
-        ui_->clear();
-        drawTitle(art);
-        hotspots_.clear();
-        PixelArt outgoing(ui_, 1.0f, -cinematic_.menuWipe() * config::width, true);
-        drawCinematicPanel(outgoing, cinematic_.scene(), cinematic_.sceneTime());
-    }
-    art.rect(30, 68, 1220, 83, ink);
-    const auto lines = PixelArt::wrap(cinematic_.caption(), 1150, 2);
-    float y = lines.size() > 1 ? 117.0f : 100.0f;
-    for (const auto& line : lines)
-    {
-        art.centered(line, 640, y, 2, paper);
-        y -= 26;
+        if (cinematicFadeScene_ != index)
+        {
+            cinematicFadeScene_ = index;
+            cinematicIncoming_->clear();
+            PixelArt incoming(cinematicIncoming_);
+            if (index + 1 < intro::scenes.size())
+            {
+                const auto& next = intro::scenes[index + 1];
+                drawCinematicPanel(incoming, next, 0.0f);
+                drawCinematicCaptions(incoming, next.captions[0].text);
+            }
+            else
+            {
+                drawTitle(incoming);
+                hotspots_.clear();
+            }
+            cinematicIncoming_->setVisible(true);
+            cinematicFade_->beginWithClear(0, 0, 0, 0);
+            cinematicIncoming_->visit(ax::Director::getInstance()->getRenderer(), ax::Mat4::IDENTITY, 0);
+            cinematicFade_->end();
+            cinematicIncoming_->setVisible(false);
+        }
+        cinematicFade_->getSprite()->setOpacity(static_cast<std::uint8_t>(std::lround(fade * 255)));
+        cinematicFade_->setVisible(true);
     }
     art.text(intro::skipHint, 1020, 28, 1, muted);
     art.text(muted_ ? "[M] SOUND OFF" : "[M] SOUND ON", 30, 28, 1, muted);

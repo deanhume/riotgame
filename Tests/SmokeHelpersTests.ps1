@@ -6,7 +6,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$to
 if ($errors.Count) { throw ($errors | Out-String) }
 
 # Load the real helpers without executing the desktop scenarios or requiring a built game.
-$names = @('Wait-Until', 'Wait-State', 'Test-SaveFrame', 'Invoke-Scenario')
+$names = @('Wait-Until', 'Read-SmokeState', 'Wait-State', 'Test-SaveFrame', 'Invoke-Scenario')
 foreach ($name in $names) {
     $definition = $ast.Find({
         param($node)
@@ -43,6 +43,11 @@ $script:exitGame = $false
 $script:nextState = ''
 try {
     [System.IO.File]::WriteAllText($script:statePath, "phase=DefendIntro`npaused=0`n")
+    $writer = [System.IO.FileStream]::new($script:statePath, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try {
+        Check ((Read-SmokeState) -match 'phase=DefendIntro') 'Smoke polling must allow the game to keep writing.'
+    } finally { $writer.Dispose() }
     $script:nextState = "phase=Defend`r`npaused=1`r`n"
     Wait-State 'Defend' 1 1000
     Check ($script:polls -ge 2) 'State waits must poll until the requested phase and pause state arrive.'

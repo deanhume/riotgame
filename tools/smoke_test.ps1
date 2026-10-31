@@ -94,7 +94,7 @@ function Start-Game([string[]]$Arguments, [switch]$KeepIntro) {
         throw 'Game has no responsive native window.'
     }
     Wait-State
-    if (!$KeepIntro -and [System.IO.File]::ReadAllText($script:statePath) -match '(?m)^phase=Cinematic\r?$') {
+    if (!$KeepIntro -and (Read-SmokeState) -match '(?m)^phase=Cinematic\r?$') {
         Press-Key 32
         Wait-State 'Title'
     }
@@ -110,10 +110,20 @@ function Wait-Until([scriptblock]$Condition, [string]$Message, [int]$TimeoutMill
     throw "Timed out: $Message"
 }
 
+function Read-SmokeState {
+    $stream = [System.IO.FileStream]::new($script:statePath, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $reader = [System.IO.StreamReader]::new($stream)
+        try { $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 function Wait-State([string]$Phase = '', [int]$Paused = -1, [int]$TimeoutMilliseconds = 5000) {
     Wait-Until {
         if (!(Test-Path -LiteralPath $script:statePath)) { return $false }
-        try { $state = [System.IO.File]::ReadAllText($script:statePath) }
+        try { $state = Read-SmokeState }
         catch [System.IO.IOException] { Write-Verbose "State file is being updated: $_"; return $false }
         $phaseReady = if ($Phase) { $state -match "(?m)^phase=$([regex]::Escape($Phase))\r?$" } else { $state -match '(?m)^phase=\w+\r?$' }
         $phaseReady -and ($Paused -lt 0 -or $state -match "(?m)^paused=$Paused\r?$")
@@ -186,7 +196,7 @@ function Get-Signature([System.Drawing.Bitmap]$image) {
 
 function Test-SaveFrame([string]$name, [bool]$Force) {
     $Force -or $Screenshots -eq 'All' -or
-        ($Screenshots -eq 'Key' -and ($name -in @('title', 'map', 'finished', 'defend_active2', 'defend_lost', 'cinematic_studio') -or
+        ($Screenshots -eq 'Key' -and ($name -in @('title', 'map', 'finished', 'defend_active2', 'defend_lost', 'cinematic_crowd') -or
                                     $name.StartsWith('tour_')))
 }
 
@@ -310,25 +320,43 @@ function Get-SavePath([string]$name) {
 }
 
 Invoke-Scenario 'Intro' 'launch intro and immediate Space skip' @('--windowed', '--save', (Get-SavePath 'intro')) {
-    $opening = Save-Frame 'cinematic_studio' 'Cinematic'
+    $opening = Save-Frame 'cinematic_crowd' 'Cinematic'
     Press-Key 13
     Wait-State 'Cinematic'
     if (!$Quick) {
         foreach ($scene in 1..3) {
+            $previous = $scene - 1
             Wait-Until {
-                [System.IO.File]::ReadAllText($script:statePath) -match "(?m)^introScene=$scene\r?$"
-            } "intro scene $scene" 10000
+                $state = Read-SmokeState
+                $state -match "(?m)^introScene=$previous\r?$" -and $state -match '(?m)^introFade=[4-7]\r?$'
+            } "intro crossfade to scene $scene" 15000
+            $null = Save-Frame "cinematic_fade$scene" 'Cinematic'
+            Wait-Until {
+                (Read-SmokeState) -match "(?m)^introScene=$scene\r?$"
+            } "intro scene $scene" 15000
             $null = Save-Frame "cinematic_scene$scene" 'Cinematic'
         }
-        Wait-State 'Title' -1 6000
+        $introMusicId = [regex]::Match((Read-SmokeState), '(?m)^musicId=(-?\d+)').Groups[1].Value
+        Wait-Until { (Read-SmokeState) -match '(?m)^introFade=[4-7]\r?$' } 'intro menu crossfade' 8000
+        $null = Save-Frame 'cinematic_menu_fade' 'Cinematic'
+        Wait-State 'Title' -1 3000
     } else {
         Press-Key 32 150
         Wait-State 'Title'
     }
     $title = Save-Frame 'cinematic_menu' 'Title'
     Assert-Changed $opening $title 'The cinematic did not return to the menu'
+    Wait-Until { (Read-SmokeState) -match '(?m)^music=1\r?$' } 'menu music is playing'
+    if (!$Quick -and [regex]::Match((Read-SmokeState), '(?m)^musicId=(-?\d+)').Groups[1].Value -ne $introMusicId) {
+        throw 'Intro music restarted instead of continuing into the menu.'
+    }
+    Press-Key 0x4D
+    Wait-Until { (Read-SmokeState) -match '(?m)^music=0\r?$' } 'menu music mutes'
+    Press-Key 0x4D
+    Wait-Until { (Read-SmokeState) -match '(?m)^music=1\r?$' } 'menu music resumes'
     Press-Key 13
     $null = Save-Frame 'cinematic_map' 'Map'
+    Wait-Until { (Read-SmokeState) -match '(?m)^music=0\r?$' } 'menu music stops when starting'
     Press-Key 0x1B
     $null = Save-Frame 'cinematic_return_title' 'Title'
 }
@@ -348,19 +376,36 @@ Invoke-Scenario 'Riot' 'play level 1 from the map' $playArguments {
     Click-Game @introButton
     $prep = Save-Frame 'street1' 'Prep'
     Assert-Changed $intro $prep 'START LEVEL did not begin the level'
+    if ((Read-SmokeState) -notmatch '(?m)^lanes=1\r?$') { throw 'Level 1 must have one tutorial row.' }
     Click-Game 596 444
+    $validRowState = Read-SmokeState
     Click-Game 596 340
     Click-Game 596 236
-    Click-Game 130 110
+    $invalidRowState = Read-SmokeState
+    foreach ($field in 'gadgets', 'budget') {
+        if ([regex]::Match($validRowState, "(?m)^$field=(\d+)").Groups[1].Value -ne
+            [regex]::Match($invalidRowState, "(?m)^$field=(\d+)").Groups[1].Value) {
+            throw 'An inactive tutorial row accepted a placement or spent money.'
+        }
+    }
+    Click-Game 590 110
     Click-Game 362 444
+    $null = Save-Frame 'tutorial_officer' 'Prep'
+    Click-Game 130 110
+    Click-Game 440 444
     $null = Save-Frame 'prep'
     Press-Key 32
     Wait-State 'Wave'
     if (!$Quick) {
+        $floorBricks = 0
         foreach ($second in 6, 9, 12, 15) {
             Start-Sleep -Seconds 3
             $null = Save-Frame "wave_$second"
+            $count = [int][regex]::Match((Read-SmokeState), '(?m)^floorBricks=(\d+)').Groups[1].Value
+            if ($count -lt $floorBricks) { throw 'Landed bricks disappeared during the level.' }
+            $floorBricks = $count
         }
+        if ($floorBricks -eq 0) { throw 'The crowd did not leave any bricks on the floor.' }
     }
     Press-Key 80
     $paused = Save-Frame 'paused' 'Wave' 1
@@ -370,9 +415,25 @@ Invoke-Scenario 'Riot' 'play level 1 from the map' $playArguments {
     Press-Key 0x7A
     Wait-Fullscreen $expectFullscreen
     $null = Save-Frame 'restored'
-    Click-Game @pauseQuit
+    if (!$Quick) {
+        Press-Key 80
+        Wait-State 'Won' -1 22000
+        $count = [int][regex]::Match((Read-SmokeState), '(?m)^floorBricks=(\d+)').Groups[1].Value
+        if ($count -lt $floorBricks) { throw 'The tutorial result cleared landed bricks.' }
+        $null = Save-Frame 'tutorial_complete' 'Won'
+        Press-Key 0x1B
+    } else {
+        Click-Game @pauseQuit
+    }
     $back = Save-Frame 'map_after_quit' 'Map'
     Assert-Changed $paused $back 'QUIT TO MAP did not leave the level'
+    if (!$Quick) {
+        $count = [int][regex]::Match((Read-SmokeState), '(?m)^floorBricks=(\d+)').Groups[1].Value
+        if ($count -lt $floorBricks) { throw 'Leaving the wave cleared its landed bricks.' }
+        Click-Game @mapLevel1
+        Wait-State 'Intro'
+        Wait-Until { (Read-SmokeState) -match '(?m)^floorBricks=0\r?$' } 'a new level clears floor bricks'
+    }
     Assert-Alive 'gameplay'
     Write-Host "   started $mode, F11 toggles both ways, pause quits to the map"
 }
@@ -425,6 +486,14 @@ Invoke-Scenario 'Campaign' 'campaign: riot 9, defend 10, riot 11, defend 12, sho
     Press-Key 13     # BACK TO MAP
     $map = Save-Frame 'map_after_finale' 'Map'
     Assert-Changed $finished $map 'Enter did not return to the map'
+    Press-Key 0x30
+    $null = Save-Frame 'map_select_defend10' 'DefendIntro'
+    Press-Key 0x1B
+    Wait-State 'Map'
+    Press-Key 0x39
+    $null = Save-Frame 'map_select_riot9' 'Intro'
+    Press-Key 0x1B
+    Wait-State 'Map'
     Press-Key 0x57   # W: wardrobe
     $wardrobe = Save-Frame 'wardrobe' 'Wardrobe'
     Assert-Changed $map $wardrobe 'W did not open the wardrobe'

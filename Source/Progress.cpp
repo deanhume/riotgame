@@ -155,6 +155,7 @@ void Progress::record(int level, int newStars, unsigned goals)
 
 void Progress::sanitize()
 {
+    carryCash = std::clamp(carryCash, 0, 1000000);
     for (int level = 0; level < levelCount; ++level)
     {
         stars[level] = std::clamp(stars[level], 0, maxStarsPerLevel);
@@ -176,7 +177,7 @@ std::string goalText(const GoalDef& goal)
     switch (goal.type)
     {
     case GoalType::NoBarriersLost:
-        return "Lose no barriers or vans";
+        return "Lose no barriers or officers";
     case GoalType::BudgetLeft:
         return "Finish with " + money(goal.amount) + " in the bank";
     case GoalType::MaxSpend:
@@ -184,7 +185,7 @@ std::string goalText(const GoalDef& goal)
     case GoalType::MoodBelow:
         return "Keep the crowd mood under " + std::to_string(goal.amount) + "%";
     case GoalType::NoVans:
-        return "Win without a police van";
+        return "Win without a shield officer";
     }
     return {};
 }
@@ -202,7 +203,7 @@ std::string goalShortText(GoalType type)
     case GoalType::MoodBelow:
         return "CALM CROWD";
     case GoalType::NoVans:
-        return "NO VANS";
+        return "NO OFFICERS";
     }
     return {};
 }
@@ -249,6 +250,7 @@ std::string serialize(const Progress& progress)
     text += "stars=" + writeList(progress.stars) + "\n";
     text += "goals=" + writeList(progress.goalsMet) + "\n";
     text += "defended=" + writeList(progress.defended) + "\n";
+    text += "cash=" + std::to_string(progress.carryCash) + "\n";
     for (int i = 0; i < upgradeCount; ++i)
         text += std::string("upgrade.") + upgrades[i].id + "=" + std::to_string(progress.tiers[i]) + "\n";
     text += std::string("hat=") + hats[progress.hat].id + "\n";
@@ -275,6 +277,8 @@ Progress parseProgress(std::string_view text)
             readList(value, progress.goalsMet);
         else if (key == "defended")
             readList(value, progress.defended);
+        else if (key == "cash")
+            readInt(value, progress.carryCash);
         else if (key == "hat")
             progress.hat = findId(hats, value);
         else if (key == "cone")

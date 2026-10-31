@@ -10,8 +10,8 @@
 
 namespace riot
 {
-// Everything that survives between sessions: best stars, the bonus goals ever met, upgrades bought, and the
-// cosmetics being worn. Saved as a small key=value text file (see serialize()).
+// Everything that survives between sessions: best stars, goals, upgrades, cosmetics and carried cash.
+// Saved as a small key=value text file (see serialize()).
 struct Progress
 {
     std::array<int, levelCount> stars{};
@@ -20,6 +20,7 @@ struct Progress
     std::array<int, upgradeCount> tiers{};
     int hat = 0;
     int cone = 0;
+    int carryCash = 0;
 
     int totalStars() const;
     int pointsEarned() const;
@@ -39,8 +40,8 @@ struct Progress
     void sanitize();
 };
 
-std::string goalText(const GoalDef& goal);                           // "Lose no barriers or vans"
-std::string goalShortText(GoalType type);                            // "NO VANS"
+std::string goalText(const GoalDef& goal);                           // "Lose no barriers or officers"
+std::string goalShortText(GoalType type);                            // "NO OFFICERS"
 std::string unlockText(const Unlock& unlock);                        // "3 STARS"
 std::string upgradeEffectText(const UpgradeDef& upgrade, int tier);  // "+15% BARRIER HEALTH"; tier 0 = none
 
